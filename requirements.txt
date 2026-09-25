@@ -3,6 +3,9 @@
 # PowerShell), поэтому Tesseract не требуется.
 Pillow>=11.0.0
 
+# Глобальный хоткей запуска/остановки цикла (как в проекте multikey).
+pynput>=1.7.7
+
 # Опционально: альтернативный движок OCR (ocr.engine="tesseract").
 # Требует установки Tesseract OCR с русским языком.
 # pytesseract>=0.3.10

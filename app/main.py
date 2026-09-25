@@ -10,16 +10,19 @@
      если нет — закрывает летопись и повторяет сценарий заново.
 
 Режимы:
-  python -m app.main                   запуск цикла реролла
+  python -m app.main                   ожидание хоткея: запуск/остановка цикла
+  python -m app.main --start           запустить цикл сразу при старте
   python -m app.main --once            одна попытка и выход
   python -m app.main --selftest        проверка конфигурации, OCR, поиска событий
   python -m app.main --check-image F   распознать готовый скриншот и найти события
+  python -m app.main --hotkey KEY      переопределить клавишу хоткея (например 'f9')
   python -m app.main --config PATH     другой файл конфигурации
 """
 
 import argparse
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -31,6 +34,7 @@ from app import ocr as ocr_mod         # noqa: E402
 from app import screen, winapi         # noqa: E402
 from app.actions import ActionRunner   # noqa: E402
 from app.config import load_config     # noqa: E402
+from app.hotkey import HotkeyListener  # noqa: E402
 from app.keys import parse_key         # noqa: E402
 
 LOG_NAME = "civ4reroll"
@@ -122,6 +126,11 @@ def perform_attempt(cfg, logger) -> dict:
                 "text": "", "screenshot": str(shot_path)}
 
     logger.info("Распознано символов: %d (движок: %s)", len(text), eng)
+    if len(text) < 10:
+        logger.warning(
+            "Текста почти нет (%d символов) — возможно, летопись не открылась "
+            "или скриншот снят не с того окна.", len(text)
+        )
     logger.debug("Текст летописи:\n%s", text[:4000])
 
     matches = events_mod.find_interesting_events(text, cfg)
@@ -149,8 +158,12 @@ def save_attempt_screenshot(cfg, shot_path: str, suffix: str, attempt: int) -> N
 # ---------------------------------------------------------------------------
 # Цикл реролла
 # ---------------------------------------------------------------------------
-def run_loop(cfg, logger, once: bool = False) -> int:
-    """Главный цикл: повторяет сценарий, пока не найдёт интересные события."""
+def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
+    """Главный цикл: повторяет сценарий, пока не найдёт интересные события.
+
+    stop_event — threading.Event: при установке цикл останавливается после
+    текущей попытки (используется хоткеем).
+    """
     winapi.set_dpi_aware(cfg.game.dpi_aware)
 
     if cfg.game.window_title:
@@ -163,19 +176,38 @@ def run_loop(cfg, logger, once: bool = False) -> int:
 
     max_attempts = 1 if once else cfg.loop.max_attempts
     if not once and cfg.loop.warmup_sec > 0:
+        if stop_event is not None and stop_event.is_set():
+            logger.info("Остановка запрошена до старта.")
+            return 0
         logger.info(
             "Старт через %.0f с. Переключитесь в окно игры!",
             cfg.loop.warmup_sec,
         )
-        _countdown(cfg.loop.warmup_sec, logger)
+        if not _countdown(cfg.loop.warmup_sec, logger, stop_event):
+            logger.info("Отсчёт прерван: запрошена остановка.")
+            return 0
 
     attempt = 0
     while True:
+        if stop_event is not None and stop_event.is_set():
+            logger.info("Остановлено по хоткею после попытки %d.", attempt)
+            return 0
         attempt += 1
         limit_label = "∞" if max_attempts == 0 else str(max_attempts)
         logger.info("=== Попытка %d/%s ===", attempt, limit_label)
 
-        res = perform_attempt(cfg, logger)
+        try:
+            res = perform_attempt(cfg, logger)
+        except RuntimeError as exc:
+            logger.error("Ошибка выполнения сценария: %s", exc)
+            logger.error(
+                "Проверьте, что игра запущена и окно находится по "
+                "game.window_title из config.json."
+            )
+            return 2
+        except Exception:
+            logger.exception("Непредвиденная ошибка при выполнении попытки")
+            return 1
 
         if res["found"]:
             summary = events_mod.format_summary(res["matches"])
@@ -198,16 +230,91 @@ def run_loop(cfg, logger, once: bool = False) -> int:
 
         if 0 < max_attempts <= attempt:
             break
+        if stop_event is not None and stop_event.is_set():
+            logger.info("Остановлено по хоткею после попытки %d.", attempt)
+            return 0
         time.sleep(cfg.loop.pause_between_attempts_sec)
 
     logger.warning("Достигнут лимит попыток (%d), интересных событий не найдено.", attempt)
     return 1
 
 
-def _countdown(seconds: float, logger) -> None:
+def _countdown(seconds: float, logger, stop_event=None) -> bool:
+    """Обратный отсчёт. Возвращает True, если отсчёт завершён полностью."""
     for left in range(int(seconds), 0, -1):
+        if stop_event is not None and stop_event.is_set():
+            return False
         logger.info("%d...", left)
         time.sleep(1.0)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Управление циклом глобальным хоткеем
+# ---------------------------------------------------------------------------
+class RerollHotkeyApp:
+    """Запуск/остановка цикла реролла глобальным хоткеем (переключатель)."""
+
+    def __init__(self, cfg, logger) -> None:
+        self.cfg = cfg
+        self.logger = logger
+        self._stop = threading.Event()
+        self._thread = None
+        self.hotkey = HotkeyListener(cfg.hotkey, self.toggle)
+
+    def hotkey_label(self) -> str:
+        h = self.cfg.hotkey
+        mods = "".join(f"{m.upper()}+" for m in h.modifiers)
+        return f"{mods}{h.key}"
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def toggle(self) -> None:
+        """Обработчик хоткея: если цикл идёт — остановить, иначе — запустить."""
+        if self.running:
+            self.logger.info("Хоткей: запрошена остановка цикла (после текущей попытки)...")
+            self._stop.set()
+        else:
+            self.logger.info("Хоткей: запуск цикла реролла.")
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._worker, daemon=True)
+            self._thread.start()
+
+    def start_now(self) -> None:
+        """Запуск цикла без нажатия хоткея (флаг --start)."""
+        if self.running:
+            self.logger.warning("Цикл уже запущен.")
+            return
+        self.logger.info("Старт цикла реролла.")
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._worker, daemon=True)
+        self._thread.start()
+
+    def _worker(self) -> None:
+        try:
+            rc = run_loop(self.cfg, self.logger, stop_event=self._stop)
+            if rc == 0:
+                self.logger.info("Цикл завершён: интересные события найдены.")
+            elif rc == 2:
+                self.logger.error("Цикл остановлен: окно игры не найдено.")
+        except Exception:
+            self.logger.exception("Цикл завершился с ошибкой")
+        finally:
+            self.logger.info(
+                "Цикл остановлен. Нажмите хоткей '%s' для нового запуска.",
+                self.hotkey_label(),
+            )
+
+    def start(self) -> None:
+        self.hotkey.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self.hotkey.stop()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +380,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--config", metavar="PATH", help="путь к JSON-конфигурации")
     parser.add_argument("--once", action="store_true",
                         help="выполнить только одну попытку и выйти")
+    parser.add_argument("--start", action="store_true",
+                        help="запустить цикл сразу при старте (без ожидания хоткея)")
+    parser.add_argument("--hotkey", metavar="KEY",
+                        help="переопределить клавишу хоткея (например 'f9' или '0xDD')")
     parser.add_argument("--selftest", action="store_true",
                         help="проверить конфигурацию, OCR и поиск событий, без игры")
     parser.add_argument("--check-image", metavar="FILE",
@@ -288,6 +399,9 @@ def main(argv=None) -> int:
         print(f"[Civ4Reroll] Ошибка чтения конфигурации: {exc}")
         return 1
 
+    if args.hotkey:
+        cfg.hotkey.key = args.hotkey
+
     log_path = setup_logging(cfg)
     logger = logging.getLogger(LOG_NAME)
     logger.info("Civ4Reroll запущен. Конфигурация: %s", cfg_path)
@@ -297,11 +411,29 @@ def main(argv=None) -> int:
     if args.check_image:
         return check_image(cfg, args.check_image, logger)
 
+    if args.once:
+        try:
+            return run_loop(cfg, logger, once=True)
+        except KeyboardInterrupt:
+            logger.info("Прервано пользователем (Ctrl+C).")
+            return 0
+
+    app = RerollHotkeyApp(cfg, logger)
+    app.start()
+    if args.start:
+        app.start_now()
+    logger.info(
+        "Ожидание глобального хоткея '%s' — запуск/остановка цикла. Ctrl+C — выход.",
+        app.hotkey_label(),
+    )
     try:
-        return run_loop(cfg, logger, once=args.once)
+        while True:
+            time.sleep(1.0)
     except KeyboardInterrupt:
-        logger.info("Прервано пользователем (Ctrl+C).")
+        logger.info("Выход (Ctrl+C).")
         return 0
+    finally:
+        app.stop()
 
 
 if __name__ == "__main__":

@@ -78,13 +78,22 @@ DEFAULT_EVENT_ITEMS = [
 ]
 
 DEFAULT_CONFIG_DICT = {
+    "hotkey": {
+        "key": "]",
+        "modifiers": [],
+        "comment": (
+            "Глобальный хоткей запуска/остановки цикла. ']' — та же "
+            "физическая клавиша даёт 'ъ' в русской раскладке (срабатывание "
+            "по Virtual-Key коду). Модификаторы: ctrl, alt, shift, win."
+        ),
+    },
     "game": {
-        "window_title": None,
+        "window_title": "Civ IV: Beyond The Sword",
         "key_hold_sec": 0.02,
         "dpi_aware": False,
         "comment": (
             "window_title: строка — заголовок окна игры (поиск по подстроке); "
-            "null — работаем в текущем активном окне. dpi_aware: включайте, "
+            "null — работать в текущем активном окне. dpi_aware: включайте, "
             "если скриншот/клики съезжают при масштабировании Windows ≠ 100%."
         ),
     },
@@ -154,8 +163,14 @@ DEFAULT_CONFIG_DICT = {
 # Модель данных
 # ---------------------------------------------------------------------------
 @dataclass
+class HotkeyConfig:
+    key: str = "]"
+    modifiers: List[str] = field(default_factory=list)
+
+
+@dataclass
 class GameConfig:
-    window_title: Optional[str] = None
+    window_title: Optional[str] = "Civ IV: Beyond The Sword"
     key_hold_sec: float = 0.02
     dpi_aware: bool = False
 
@@ -215,6 +230,7 @@ class LoopConfig:
 
 @dataclass
 class AppConfig:
+    hotkey: HotkeyConfig
     game: GameConfig
     profile: Profile
     events: EventsConfig
@@ -259,6 +275,7 @@ def _parse_events(d: dict) -> EventsConfig:
 
 
 def parse_config_dict(d: dict) -> AppConfig:
+    hotkey = d.get("hotkey", {})
     game = d.get("game", {})
     ocr = d.get("ocr", {})
     shots = d.get("screenshots", {})
@@ -272,7 +289,15 @@ def parse_config_dict(d: dict) -> AppConfig:
             f"(доступно: auto, windows, tesseract, manual)"
         )
 
+    # Валидация клавиши и модификаторов хоткея (raise при ошибке).
+    from app.keys import parse_key  # noqa: F401  (валидируем ключ)
+    parse_key(str(hotkey.get("key", "]")))
+
     cfg = AppConfig(
+        hotkey=HotkeyConfig(
+            key=str(hotkey.get("key", "]")),
+            modifiers=[str(m) for m in hotkey.get("modifiers", [])],
+        ),
         game=GameConfig(
             window_title=game.get("window_title"),
             key_hold_sec=float(game.get("key_hold_sec", 0.02)),
