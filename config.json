@@ -1,0 +1,275 @@
+{
+  "game": {
+    "window_title": null,
+    "key_hold_sec": 0.02,
+    "dpi_aware": false,
+    "comment": "window_title: строка — заголовок окна игры (поиск по подстроке); null — работаем в текущем активном окне. dpi_aware: включайте, если скриншот/клики съезжают при масштабировании Windows ≠ 100%."
+  },
+  "profile": {
+    "name": "civ4-reroll",
+    "comment": "Сценарий из multikey/config.json: загрузка tmp.CivBeyondSwordSave, пропуск ходов, открытие летописи. Последний esc (скрывающий летопись) НЕ входит в список — его нажимает сама программа после чтения скриншота.",
+    "actions": [
+      {
+        "type": "move",
+        "x": 50,
+        "y": 50,
+        "relative": true,
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "esc",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "down",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "down",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "down",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "down",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "tab",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "tab",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "tab",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "tab",
+        "delay": 0.1
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.1
+      },
+      {
+        "type": "move",
+        "x": 600,
+        "y": 233,
+        "relative": true,
+        "delay": 0.2
+      },
+      {
+        "type": "click",
+        "button": "left",
+        "delay": 0.2
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 1.0
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.2
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.2
+      },
+      {
+        "type": "move",
+        "x": 1110,
+        "y": 130,
+        "relative": true,
+        "delay": 0.2
+      },
+      {
+        "type": "click",
+        "button": "left",
+        "delay": 0.2
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "ctrl+tab",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 0.5
+      },
+      {
+        "type": "key",
+        "key": "enter",
+        "delay": 2.0
+      }
+    ]
+  },
+  "events": {
+    "context_keywords": [
+      "шахт",
+      "обнаруж"
+    ],
+    "fuzzy": true,
+    "min_ratio": 0.8,
+    "items": [
+      {
+        "name": "Золото",
+        "keywords": [
+          "золото"
+        ]
+      },
+      {
+        "name": "Серебро",
+        "keywords": [
+          "серебро"
+        ]
+      },
+      {
+        "name": "Медь",
+        "keywords": [
+          "медь"
+        ]
+      },
+      {
+        "name": "Железо",
+        "keywords": [
+          "железо"
+        ]
+      },
+      {
+        "name": "Уголь",
+        "keywords": [
+          "уголь"
+        ]
+      },
+      {
+        "name": "Драгоценные камни",
+        "keywords": [
+          "драгоценные камни"
+        ]
+      }
+    ],
+    "comment": "Событие считается найденным, если в одном предложении летописи есть ВСЕ context_keywords и ВСЕ keywords пункта. fuzzy=true — нечёткий поиск (устойчив к ошибкам OCR)."
+  },
+  "ocr": {
+    "engine": "auto",
+    "language": "ru-RU",
+    "preprocess": true,
+    "max_image_dim": 2400,
+    "comment": "engine: auto | windows (встроенный Windows OCR, PowerShell) | tesseract (pytesseract + Tesseract) | manual (показать скриншот и спросить пользователя)."
+  },
+  "screenshots": {
+    "dir": "screenshots",
+    "capture": "window",
+    "keep_all_attempts": false,
+    "save_success": true,
+    "save_fail": false,
+    "comment": "capture: window (область активного окна, как в multikey) | fullscreen (весь экран)."
+  },
+  "log": {
+    "dir": "logs",
+    "file": "civ4_reroll.log",
+    "level": "INFO",
+    "comment": "level: DEBUG | INFO | WARNING | ERROR."
+  },
+  "loop": {
+    "max_attempts": 0,
+    "warmup_sec": 5.0,
+    "pause_between_attempts_sec": 3.0,
+    "esc_after_read_sec": 0.3,
+    "comment": "max_attempts: 0 — бесконечно (остановка Ctrl+C или при находке). warmup_sec — пауза перед стартом, чтобы переключиться в игру."
+  }
+}

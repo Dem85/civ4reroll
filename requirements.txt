@@ -1,0 +1,8 @@
+# Civ4Reroll — минимальные зависимости.
+# OCR выполняется встроенным движком Windows (Windows.Media.Ocr через
+# PowerShell), поэтому Tesseract не требуется.
+Pillow>=11.0.0
+
+# Опционально: альтернативный движок OCR (ocr.engine="tesseract").
+# Требует установки Tesseract OCR с русским языком.
+# pytesseract>=0.3.10
