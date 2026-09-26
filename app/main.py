@@ -374,6 +374,8 @@ class RerollHotkeyApp:
         self.logger = logger
         self._stop = threading.Event()
         self._thread = None
+        self._exit_event = threading.Event()
+        self._exit_code = 0
         self.hotkey = HotkeyListener(cfg.hotkey, self.toggle)
 
     def hotkey_label(self) -> str:
@@ -409,17 +411,42 @@ class RerollHotkeyApp:
     def _worker(self) -> None:
         try:
             rc = run_loop(self.cfg, self.logger, stop_event=self._stop)
-            if rc == 0:
-                self.logger.info("Цикл завершён: интересные события найдены.")
-            elif rc == 2:
-                self.logger.error("Цикл остановлен: окно игры не найдено.")
         except Exception:
             self.logger.exception("Цикл завершился с ошибкой")
-        finally:
+            self._finish(1)
+            return
+
+        # Остановлено пользователем хоткеем — остаёмся ждать следующий запуск.
+        if self._stop.is_set():
             self.logger.info(
                 "Цикл остановлен. Нажмите хоткей '%s' для нового запуска.",
                 self.hotkey_label(),
             )
+            return
+
+        # Цикл завершился сам (находка / лимит / ошибка) — завершаем процесс.
+        if rc == 0:
+            self.logger.info("Интересные события найдены — завершение работы.")
+        elif rc == 1:
+            self.logger.warning("Лимит попыток исчерпан — завершение работы.")
+        elif rc == 2:
+            self.logger.error("Окно/процесс игры не найден — завершение работы.")
+        else:
+            self.logger.error("Аварийная остановка — завершение работы.")
+        self._finish(rc)
+
+    def _finish(self, rc: int) -> None:
+        """Завершает приложение с кодом rc."""
+        self._exit_code = rc
+        self._exit_event.set()
+
+    @property
+    def exit_code(self) -> int:
+        return self._exit_code
+
+    @property
+    def exit_event(self) -> threading.Event:
+        return self._exit_event
 
     def start(self) -> None:
         self.hotkey.start()
@@ -550,8 +577,10 @@ def main(argv=None) -> int:
         app.hotkey_label(),
     )
     try:
-        while True:
-            time.sleep(1.0)
+        # Ждём естественного завершения цикла (находка/лимит/ошибка);
+        # Ctrl+C — выход из приложения.
+        app.exit_event.wait()
+        return app.exit_code
     except KeyboardInterrupt:
         logger.info("Выход (Ctrl+C).")
         return 0
