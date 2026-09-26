@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import events as events_mod   # noqa: E402
 from app import ocr as ocr_mod         # noqa: E402
 from app import screen, winapi         # noqa: E402
-from app.actions import ActionRunner   # noqa: E402
+from app.actions import ActionRunner, find_target_window  # noqa: E402
 from app.config import load_config     # noqa: E402
 from app.hotkey import HotkeyListener  # noqa: E402
 from app.keys import parse_key         # noqa: E402
@@ -209,6 +209,24 @@ def save_attempt_screenshot(cfg, shot_path: str, suffix: str, attempt: int) -> N
     logging.getLogger(LOG_NAME).info("Скриншот сохранён: %s", dst.resolve())
 
 
+def _target_window_present(cfg, logger) -> bool:
+    """Проверяет наличие целевого окна/процесса игры.
+
+    Если window_title/window_process не заданы (режим «текущее окно») —
+    всегда True. Иначе: окно должно существовать, иначе False.
+    """
+    if not (cfg.game.window_title or cfg.game.window_process):
+        return True
+    if find_target_window(cfg.game.window_title, cfg.game.window_process) is None:
+        logger.error(
+            "Целевой процесс/окно игры не найден "
+            "(заголовок: %r, процесс: %r) — остановка.",
+            cfg.game.window_title, cfg.game.window_process,
+        )
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Цикл реролла
 # ---------------------------------------------------------------------------
@@ -227,6 +245,10 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             "Работаем в текущем активном окне. Сейчас активно: %r",
             winapi.foreground_window_title(),
         )
+
+    # Останавливаемся сразу, если целевой процесс/окно игры отсутствует.
+    if not _target_window_present(cfg, logger):
+        return 2
 
     max_attempts = 1 if once else cfg.loop.max_attempts
     if not once and cfg.loop.warmup_sec > 0:
@@ -247,6 +269,9 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
         if stop_event is not None and stop_event.is_set():
             logger.info("Остановлено по хоткею после попытки %d.", attempt)
             return 0
+        # Целевой процесс исчез (игра закрыта) — останавливаемся.
+        if not _target_window_present(cfg, logger):
+            return 2
         attempt += 1
         limit_label = "∞" if max_attempts == 0 else str(max_attempts)
         logger.info("=== Попытка %d/%s ===", attempt, limit_label)

@@ -87,6 +87,22 @@ class Action:
             time.sleep(self.delay)
 
 
+def find_target_window(window_title: Optional[str], window_process: Optional[str]):
+    """Ищет окно игры: сначала по заголовку, затем по имени процесса.
+
+    Возвращает HWND или None (окно/процесс не найден).
+    """
+    if window_title:
+        hwnd = winapi.find_window(window_title)
+        if hwnd:
+            return hwnd
+    if window_process:
+        hwnd = winapi.find_window_by_process(window_process)
+        if hwnd:
+            return hwnd
+    return None
+
+
 class ActionRunner:
     """Выполняет последовательность действий сценария (синхронно)."""
 
@@ -98,25 +114,13 @@ class ActionRunner:
         self.target_window_title = target_window_title
         self.target_window_process = target_window_process
 
-    def _find_target_window(self):
-        """Ищет окно игры: сначала по заголовку, затем по имени процесса."""
-        if self.target_window_title:
-            hwnd = winapi.find_window(self.target_window_title)
-            if hwnd:
-                return hwnd
-        if self.target_window_process:
-            hwnd = winapi.find_window_by_process(self.target_window_process)
-            if hwnd:
-                return hwnd
-        return None
-
     def run(self) -> Optional[int]:
         """Выполняет все действия и возвращает HWND окна игры (или None).
 
         Если задан target_window_title/target_window_process — сначала
         активирует окно игры, иначе работает в текущем (активном) окне.
         """
-        hwnd = self._find_target_window()
+        hwnd = find_target_window(self.target_window_title, self.target_window_process)
         if hwnd:
             winapi.activate_window(hwnd)
         elif self.target_window_title or self.target_window_process:
