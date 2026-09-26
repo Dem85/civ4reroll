@@ -89,12 +89,14 @@ DEFAULT_CONFIG_DICT = {
     },
     "game": {
         "window_title": "Civ IV: Beyond The Sword",
+        "window_process": "Civ4BeyondSword.exe",
         "key_hold_sec": 0.02,
         "dpi_aware": False,
         "comment": (
-            "window_title: строка — заголовок окна игры (поиск по подстроке); "
-            "null — работать в текущем активном окне. dpi_aware: включайте, "
-            "если скриншот/клики съезжают при масштабировании Windows ≠ 100%."
+            "Окно игры ищется по window_title (подстрока), затем — по процессу "
+            "window_process (имя exe). null — работать в текущем активном окне. "
+            "dpi_aware: включайте, если скриншот/клики съезжают при "
+            "масштабировании Windows ≠ 100%."
         ),
     },
     "profile": {
@@ -122,11 +124,16 @@ DEFAULT_CONFIG_DICT = {
         "engine": "auto",
         "language": "ru-RU",
         "preprocess": True,
-        "max_image_dim": 2400,
+        "max_image_dim": 3000,
+        "crop": [0.0, 0.15, 1.0, 0.45],
+        "log_title_keyword": "летопис",
         "comment": (
             "engine: auto | windows (встроенный Windows OCR, PowerShell) | "
             "tesseract (pytesseract + Tesseract) | manual (показать скриншот и "
-            "спросить пользователя)."
+            "спросить пользователя). crop: [x1,y1,x2,y2] в долях 0..1 — область, "
+            "где появляется летопись (фокус для распознавания). "
+            "log_title_keyword: если слова нет в распознанном тексте — аварийная "
+            "остановка (летопись не открылась); пустая строка отключает проверку."
         ),
     },
     "screenshots": {
@@ -171,6 +178,7 @@ class HotkeyConfig:
 @dataclass
 class GameConfig:
     window_title: Optional[str] = "Civ IV: Beyond The Sword"
+    window_process: Optional[str] = "Civ4BeyondSword.exe"
     key_hold_sec: float = 0.02
     dpi_aware: bool = False
 
@@ -201,7 +209,9 @@ class OcrConfig:
     engine: str = "auto"          # auto | windows | tesseract | manual
     language: str = "ru-RU"
     preprocess: bool = True
-    max_image_dim: int = 2400
+    max_image_dim: int = 3000
+    crop: Optional[List[float]] = None      # [x1,y1,x2,y2] в долях 0..1
+    log_title_keyword: str = "летопис"      # "" — проверка выключена
 
 
 @dataclass
@@ -274,6 +284,21 @@ def _parse_events(d: dict) -> EventsConfig:
     )
 
 
+def _parse_crop(raw) -> Optional[List[float]]:
+    """Разбирает ocr.crop: список [x1, y1, x2, y2] в долях 0..1."""
+    if not raw:
+        return None
+    try:
+        vals = [float(v) for v in raw]
+    except (TypeError, ValueError):
+        raise ValueError(f"ocr.crop должен быть списком из 4 чисел, получено: {raw!r}")
+    if len(vals) != 4:
+        raise ValueError(f"ocr.crop должен содержать 4 числа (x1,y1,x2,y2), получено: {raw!r}")
+    if not all(0.0 <= v <= 1.0 for v in vals):
+        raise ValueError(f"ocr.crop должен быть в долях 0..1, получено: {raw!r}")
+    return vals
+
+
 def parse_config_dict(d: dict) -> AppConfig:
     hotkey = d.get("hotkey", {})
     game = d.get("game", {})
@@ -300,6 +325,7 @@ def parse_config_dict(d: dict) -> AppConfig:
         ),
         game=GameConfig(
             window_title=game.get("window_title"),
+            window_process=game.get("window_process"),
             key_hold_sec=float(game.get("key_hold_sec", 0.02)),
             dpi_aware=bool(game.get("dpi_aware", False)),
         ),
@@ -309,7 +335,9 @@ def parse_config_dict(d: dict) -> AppConfig:
             engine=ocr_engine,
             language=str(ocr.get("language", "ru-RU")),
             preprocess=bool(ocr.get("preprocess", True)),
-            max_image_dim=int(ocr.get("max_image_dim", 2400)),
+            max_image_dim=int(ocr.get("max_image_dim", 3000)),
+            crop=_parse_crop(ocr.get("crop")),
+            log_title_keyword=str(ocr.get("log_title_keyword", "летопис")).strip().lower(),
         ),
         screenshots=ScreenshotConfig(
             dir=str(shots.get("dir", "screenshots")),

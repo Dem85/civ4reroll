@@ -261,6 +261,75 @@ def find_window(title_part: str):
     return found[0] if found else None
 
 
+def find_window_by_process(process_name: str):
+    """Ищет видимое главное окно процесса по имени исполняемого файла.
+
+    Например, "Civ4BeyondSword.exe". Сначала собираются PID процессов с
+    нужным именем (Toolhelp32), затем EnumWindows ищет видимое окно с
+    заголовком, принадлежащее одному из этих PID.
+    """
+    process_name = process_name.strip().lower()
+    if not process_name:
+        return None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    TH32CS_SNAPPROCESS = 0x00000002
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == ctypes.c_void_p(-1).value or snapshot in (0, -1):
+        return None
+
+    pids = set()
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            while True:
+                if entry.szExeFile.lower() == process_name:
+                    pids.add(entry.th32ProcessID)
+                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    break
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+    if not pids:
+        return None
+
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def enum_proc(hwnd, lparam):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value in pids and user32.IsWindowVisible(hwnd) \
+                and user32.GetWindowTextLengthW(hwnd) > 0:
+            found.append(hwnd)
+            return False  # остановить перебор
+        return True
+
+    user32.EnumWindows(enum_proc, 0)
+    return found[0] if found else None
+
+
 def activate_window(hwnd) -> None:
     """Разворачивает (если свёрнуто) и выводит окно на передний план."""
     if user32.IsIconic(hwnd):

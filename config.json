@@ -6,9 +6,10 @@
   },
   "game": {
     "window_title": "Civ IV: Beyond The Sword",
+    "window_process": "Civ4BeyondSword.exe",
     "key_hold_sec": 0.02,
     "dpi_aware": false,
-    "comment": "window_title: строка — заголовок окна игры (поиск по подстроке); null — работать в текущем активном окне. dpi_aware: включайте, если скриншот/клики съезжают при масштабировании Windows ≠ 100%."
+    "comment": "Окно игры ищется по window_title (подстрока), затем — по процессу window_process (имя exe). null — работать в текущем активном окне. dpi_aware: включайте, если скриншот/клики съезжают при масштабировании Windows ≠ 100%."
   },
   "profile": {
     "name": "civ4-reroll",
@@ -253,8 +254,15 @@
     "engine": "auto",
     "language": "ru-RU",
     "preprocess": true,
-    "max_image_dim": 2400,
-    "comment": "engine: auto | windows (встроенный Windows OCR, PowerShell) | tesseract (pytesseract + Tesseract) | manual (показать скриншот и спросить пользователя)."
+    "max_image_dim": 3000,
+    "crop": [
+      0.0,
+      0.15,
+      1.0,
+      0.45
+    ],
+    "log_title_keyword": "летопис",
+    "comment": "engine: auto | windows (встроенный Windows OCR, PowerShell) | tesseract (pytesseract + Tesseract) | manual (показать скриншот и спросить пользователя). crop: [x1,y1,x2,y2] в долях 0..1 — область, где появляется летопись (фокус для распознавания). log_title_keyword: если слова нет в распознанном тексте — аварийная остановка (летопись не открылась); пустая строка отключает проверку."
   },
   "screenshots": {
     "dir": "screenshots",

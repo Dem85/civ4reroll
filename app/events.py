@@ -95,6 +95,24 @@ def extract_city(sentence: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def text_has_keyword(text: str, keyword: str, fuzzy: bool = True,
+                     min_ratio: float = 0.75) -> bool:
+    """Проверяет, есть ли ключевое слово в тексте (устойчиво к ошибкам OCR).
+
+    Используется для проверки, что на скриншоте открыта летопись
+    (например, keyword="летопис").
+    """
+    if not keyword:
+        return True
+    norm_text = normalize_text(text)
+    if not norm_text:
+        return False
+    norm_kw = normalize_text(keyword)
+    if not norm_kw:
+        return True
+    return _keyword_hit(norm_kw, norm_text, fuzzy, min_ratio)
+
+
 def find_interesting_events(text: str, cfg) -> List[EventMatch]:
     """Ищет в тексте летописи события из конфигурации (cfg.events).
 

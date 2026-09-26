@@ -85,6 +85,7 @@ def perform_attempt(cfg, logger) -> dict:
         actions=cfg.profile.actions,
         key_hold_sec=cfg.game.key_hold_sec,
         target_window_title=cfg.game.window_title,
+        target_window_process=cfg.game.window_process,
     )
 
     logger.info("Запуск сценария: загрузка сохранения, пропуск ходов, открытие летописи...")
@@ -121,17 +122,27 @@ def perform_attempt(cfg, logger) -> dict:
     try:
         text, eng = ocr_mod.recognize(str(shot_path), cfg)
     except ocr_mod.OcrError as exc:
-        logger.warning("OCR не удался: %s", exc)
+        logger.error("OCR не удался: %s", exc)
         return {"found": False, "matches": [], "engine": "?",
-                "text": "", "screenshot": str(shot_path)}
+                "text": "", "screenshot": str(shot_path),
+                "fatal_reason": f"OCR не удался: {exc}"}
 
     logger.info("Распознано символов: %d (движок: %s)", len(text), eng)
+    logger.info("Текст летописи:\n%s", text)
     if len(text) < 10:
         logger.warning(
             "Текста почти нет (%d символов) — возможно, летопись не открылась "
             "или скриншот снят не с того окна.", len(text)
         )
-    logger.debug("Текст летописи:\n%s", text[:4000])
+
+    # Аварийная проверка: на скриншоте должно быть слово «Летопись».
+    keyword = cfg.ocr.log_title_keyword
+    if keyword and not events_mod.text_has_keyword(text, keyword):
+        return {"found": False, "matches": [], "engine": eng,
+                "text": text, "screenshot": str(shot_path),
+                "fatal_reason":
+                    f"Слово {keyword!r} отсутствует в распознанном тексте — "
+                    f"летопись не открылась"}
 
     matches = events_mod.find_interesting_events(text, cfg)
     return {"found": bool(matches), "matches": matches, "engine": eng,
@@ -208,6 +219,13 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
         except Exception:
             logger.exception("Непредвиденная ошибка при выполнении попытки")
             return 1
+
+        # Аварийная остановка: летопись не открылась / OCR не сработал.
+        fatal = res.get("fatal_reason")
+        if fatal:
+            logger.critical("АВАРИЙНАЯ ОСТАНОВКА: %s", fatal)
+            press_esc_close_log(cfg)
+            return 3
 
         if res["found"]:
             summary = events_mod.format_summary(res["matches"])
@@ -323,8 +341,12 @@ class RerollHotkeyApp:
 def selftest(cfg, cfg_path, logger) -> int:
     print(f"Файл конфигурации        : {cfg_path}")
     print(f"Действий в сценарии      : {len(cfg.profile.actions)}")
-    print(f"Целевое окно             : {cfg.game.window_title or 'текущее (активное)'}")
+    print(f"Целевое окно             : {cfg.game.window_title or 'текущее (активное)'}"
+          f"{'' if not cfg.game.window_process else ' / процесс ' + cfg.game.window_process}")
     print(f"OCR-движок               : {cfg.ocr.engine} -> {ocr_mod.resolve_engine(cfg)}")
+    print(f"Область OCR (crop)       : {cfg.ocr.crop or 'весь экран'}")
+    print(f"Проверка 'Летопись'      : {cfg.ocr.log_title_keyword!r} "
+          f"({'включена' if cfg.ocr.log_title_keyword else 'выключена'})")
     print(f"Интересных событий       : {len(cfg.events.items)} "
           f"({', '.join(i.name for i in cfg.events.items)})")
 
@@ -382,6 +404,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="выполнить только одну попытку и выйти")
     parser.add_argument("--start", action="store_true",
                         help="запустить цикл сразу при старте (без ожидания хоткея)")
+    parser.add_argument("--max-attempts", type=int, metavar="N",
+                        help="лимит попыток цикла (переопределяет loop.max_attempts)")
     parser.add_argument("--hotkey", metavar="KEY",
                         help="переопределить клавишу хоткея (например 'f9' или '0xDD')")
     parser.add_argument("--selftest", action="store_true",
@@ -401,6 +425,8 @@ def main(argv=None) -> int:
 
     if args.hotkey:
         cfg.hotkey.key = args.hotkey
+    if args.max_attempts is not None:
+        cfg.loop.max_attempts = args.max_attempts
 
     log_path = setup_logging(cfg)
     logger = logging.getLogger(LOG_NAME)

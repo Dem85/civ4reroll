@@ -34,11 +34,39 @@ class OcrError(RuntimeError):
 # ---------------------------------------------------------------------------
 # Подготовка изображения
 # ---------------------------------------------------------------------------
+def _apply_crop(img: "Image.Image", crop_rect) -> "Image.Image":
+    """Обрезает изображение до области, где появляется летопись.
+
+    crop_rect — список [x1, y1, x2, y2] в ДОЛЯХ (0..1) от ширины/высоты
+    исходного скриншота. Например, летопись Civ4 в верхней части окна:
+    [0.0, 0.15, 1.0, 0.45].
+    """
+    if not crop_rect:
+        return img
+    try:
+        x1, y1, x2, y2 = (float(v) for v in crop_rect)
+    except (TypeError, ValueError):
+        raise OcrError(
+            f"Некорректный ocr.crop: {crop_rect!r} "
+            f"(нужно [x1, y1, x2, y2] в долях 0..1)"
+        )
+    w, h = img.size
+    box = (
+        max(0, int(w * x1)),
+        max(0, int(h * y1)),
+        min(w, int(w * x2)),
+        min(h, int(h * y2)),
+    )
+    if box[2] <= box[0] or box[3] <= box[1]:
+        raise OcrError(f"Область кропа пустая: {crop_rect!r}")
+    return img.crop(box)
+
+
 def _preprocess(img: "Image.Image", max_dim: int) -> "Image.Image":
     """Улучшает картинку для OCR: градации серого, контраст, масштаб.
 
-    Увеличиваем мелкий шрифт летописи (до 2x), при этом не превышаем
-    max_dim — ограничение Windows OCR (OcrEngine.MaxImageDimension ~2600).
+    Увеличиваем мелкий шрифт летописи (до 2x), не превышая max_dim —
+    ограничение Windows OCR (OcrEngine.MaxImageDimension).
     """
     gray = ImageOps.autocontrast(img.convert("L"))
     w, h = gray.size
@@ -61,14 +89,17 @@ def _preprocess(img: "Image.Image", max_dim: int) -> "Image.Image":
 def prepare_for_ocr(image_path: str, cfg) -> str:
     """Возвращает путь к изображению, готовому для OCR.
 
-    Если ocr.preprocess=true — сохраняет обработанную копию рядом с исходным
-    файлом (имя "<исходное>_ocr.png"), иначе возвращает исходный путь.
+    Сначала применяется кроп (ocr.crop — область летописи), затем
+    предобработка (ocr.preprocess). Результат сохраняется рядом с исходным
+    файлом (имя "<исходное>_ocr.png"). Если ничего не настроено — возвращается
+    исходный путь.
     """
-    if not cfg.ocr.preprocess:
+    if not cfg.ocr.preprocess and not cfg.ocr.crop:
         return image_path
     src = Path(image_path)
     out = src.with_name(src.stem + "_ocr.png")
     with Image.open(src) as img:
+        img = _apply_crop(img, cfg.ocr.crop)
         processed = _preprocess(img, cfg.ocr.max_image_dim)
         processed.save(out, format="PNG")
     return str(out)
@@ -184,5 +215,11 @@ def probe_engine(cfg) -> str:
     draw.text((16, 24), "тест 123 золото шахта", fill=0, font=font)
     img.save(img_path, format="PNG")
 
-    text, eng = recognize(str(img_path), cfg)
+    # Для проверки движка кроп не применяем (тестовая картинка маленькая).
+    import copy
+    probe_cfg = copy.copy(cfg)
+    probe_cfg.ocr = copy.copy(cfg.ocr)
+    probe_cfg.ocr.crop = None
+
+    text, eng = recognize(str(img_path), probe_cfg)
     return f"{eng}: {text!r}"

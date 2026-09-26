@@ -89,6 +89,7 @@ python -m app.main --once
 | `python -m app.main --config <путь>` | другой файл конфигурации (или переменная окружения `CIV4REROLL_CONFIG`) |
 | `python -m app.main --start` | запустить цикл сразу при старте |
 | `python -m app.main --hotkey KEY` | переопределить клавишу хоткея (например `f9` или `0xDD`) |
+| `python -m app.main --max-attempts N` | лимит попыток (переопределяет `loop.max_attempts`) |
 | `python -m app.main --once` | одна попытка и выход |
 | `python -m app.main --selftest` | проверка конфигурации, OCR и поиска событий |
 | `python -m app.main --check-image F.png` | распознать скриншот `F.png` и найти события |
@@ -104,6 +105,7 @@ python -m app.main --once
   "game": {
     "window_title": "Civ IV: Beyond The Sword", // окно игры активируется автоматически;
                                    // null = текущее активное окно (не рекомендуется)
+    "window_process": "Civ4BeyondSword.exe",    // запасной поиск окна по процессу
     "key_hold_sec": 0.02,
     "dpi_aware": false             // true, если скриншот/клики съезжают при масштабе Windows != 100%
   },
@@ -128,7 +130,9 @@ python -m app.main --once
     "engine": "auto",              // auto | windows | tesseract | manual
     "language": "ru-RU",
     "preprocess": true,            // градации серого + контраст + масштаб
-    "max_image_dim": 2400
+    "max_image_dim": 3000,
+    "crop": [0.0, 0.15, 1.0, 0.45],  // область летописи в долях 0..1 (фокус OCR)
+    "log_title_keyword": "летопис"   // если слова нет на скриншоте — аварийная остановка
   },
   "screenshots": {
     "dir": "screenshots",

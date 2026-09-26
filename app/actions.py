@@ -91,26 +91,39 @@ class ActionRunner:
     """Выполняет последовательность действий сценария (синхронно)."""
 
     def __init__(self, actions: List[Action], key_hold_sec: float = 0.02,
-                 target_window_title: Optional[str] = None) -> None:
+                 target_window_title: Optional[str] = None,
+                 target_window_process: Optional[str] = None) -> None:
         self.actions = actions
         self.key_hold_sec = key_hold_sec
         self.target_window_title = target_window_title
+        self.target_window_process = target_window_process
+
+    def _find_target_window(self):
+        """Ищет окно игры: сначала по заголовку, затем по имени процесса."""
+        if self.target_window_title:
+            hwnd = winapi.find_window(self.target_window_title)
+            if hwnd:
+                return hwnd
+        if self.target_window_process:
+            hwnd = winapi.find_window_by_process(self.target_window_process)
+            if hwnd:
+                return hwnd
+        return None
 
     def run(self) -> None:
         """Выполняет все действия.
 
-        Если задан target_window_title — сначала активирует окно игры,
-        иначе работает в текущем (активном) окне.
+        Если задан target_window_title/target_window_process — сначала
+        активирует окно игры, иначе работает в текущем (активном) окне.
         """
-        if self.target_window_title:
-            hwnd = winapi.find_window(self.target_window_title)
-            if hwnd:
-                winapi.activate_window(hwnd)
-            else:
-                raise RuntimeError(
-                    f"Окно с заголовком {self.target_window_title!r} не найдено. "
-                    f"Запустите игру."
-                )
+        hwnd = self._find_target_window()
+        if hwnd:
+            winapi.activate_window(hwnd)
+        elif self.target_window_title or self.target_window_process:
+            raise RuntimeError(
+                f"Окно игры не найдено (заголовок: {self.target_window_title!r}, "
+                f"процесс: {self.target_window_process!r}). Запустите игру."
+            )
 
         for action in self.actions:
             action.run(self.key_hold_sec)
