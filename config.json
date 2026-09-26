@@ -261,16 +261,25 @@
       1.0,
       0.45
     ],
-    "log_title_keyword": "летопис",
-    "comment": "engine: auto | windows (встроенный Windows OCR, PowerShell) | tesseract (pytesseract + Tesseract) | manual (показать скриншот и спросить пользователя). crop: [x1,y1,x2,y2] в долях 0..1 — область, где появляется летопись (фокус для распознавания). log_title_keyword: если слова нет в распознанном тексте — аварийная остановка (летопись не открылась); пустая строка отключает проверку."
+    "verify_crop": [
+      0.0,
+      0.0,
+      1.0,
+      0.6
+    ],
+    "log_markers": [
+      "летопис",
+      "журнал"
+    ],
+    "comment": "engine: auto | windows | tesseract | manual. crop: область чтения летописи, verify_crop: более широкая область для проверки, что летопись открыта. log_markers: если НИ ОДНОГО маркера нет в распознанном тексте (основной кроп + verify_crop) — попытка не засчитывается, авария только после loop.log_check_retries подряд."
   },
   "screenshots": {
     "dir": "screenshots",
     "capture": "window",
     "keep_all_attempts": false,
     "save_success": true,
-    "save_fail": false,
-    "comment": "capture: window (область активного окна, как в multikey) | fullscreen (весь экран)."
+    "save_fail": true,
+    "comment": "capture: window (область активного окна, как в multikey) | fullscreen (весь экран). save_fail: сохранять скриншоты неудачных попыток (для диагностики)."
   },
   "log": {
     "dir": "logs",
@@ -283,6 +292,7 @@
     "warmup_sec": 5.0,
     "pause_between_attempts_sec": 3.0,
     "esc_after_read_sec": 0.3,
-    "comment": "max_attempts: 0 — бесконечно (остановка Ctrl+C или при находке). warmup_sec — пауза перед стартом, чтобы переключиться в игру."
+    "log_check_retries": 2,
+    "comment": "max_attempts: 0 — бесконечно (остановка Ctrl+C или при находке). log_check_retries: сколько попыток ПОДРЯД можно не обнаружить летопись, прежде чем сработает аварийная остановка."
   }
 }

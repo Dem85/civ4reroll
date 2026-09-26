@@ -126,14 +126,14 @@ DEFAULT_CONFIG_DICT = {
         "preprocess": True,
         "max_image_dim": 3000,
         "crop": [0.0, 0.15, 1.0, 0.45],
-        "log_title_keyword": "летопис",
+        "verify_crop": [0.0, 0.0, 1.0, 0.6],
+        "log_markers": ["летопис", "журнал"],
         "comment": (
-            "engine: auto | windows (встроенный Windows OCR, PowerShell) | "
-            "tesseract (pytesseract + Tesseract) | manual (показать скриншот и "
-            "спросить пользователя). crop: [x1,y1,x2,y2] в долях 0..1 — область, "
-            "где появляется летопись (фокус для распознавания). "
-            "log_title_keyword: если слова нет в распознанном тексте — аварийная "
-            "остановка (летопись не открылась); пустая строка отключает проверку."
+            "engine: auto | windows | tesseract | manual. crop: область чтения "
+            "летописи, verify_crop: более широкая область для проверки, что "
+            "летопись открыта. log_markers: если НИ ОДНОГО маркера нет в "
+            "распознанном тексте (основной кроп + verify_crop) — попытка не "
+            "засчитывается, авария только после loop.log_check_retries подряд."
         ),
     },
     "screenshots": {
@@ -141,10 +141,11 @@ DEFAULT_CONFIG_DICT = {
         "capture": "window",
         "keep_all_attempts": False,
         "save_success": True,
-        "save_fail": False,
+        "save_fail": True,
         "comment": (
             "capture: window (область активного окна, как в multikey) | "
-            "fullscreen (весь экран)."
+            "fullscreen (весь экран). save_fail: сохранять скриншоты неудачных "
+            "попыток (для диагностики)."
         ),
     },
     "log": {
@@ -158,9 +159,11 @@ DEFAULT_CONFIG_DICT = {
         "warmup_sec": 5.0,
         "pause_between_attempts_sec": 3.0,
         "esc_after_read_sec": 0.3,
+        "log_check_retries": 2,
         "comment": (
             "max_attempts: 0 — бесконечно (остановка Ctrl+C или при находке). "
-            "warmup_sec — пауза перед стартом, чтобы переключиться в игру."
+            "log_check_retries: сколько попыток ПОДРЯД можно не обнаружить "
+            "летопись, прежде чем сработает аварийная остановка."
         ),
     },
 }
@@ -210,8 +213,9 @@ class OcrConfig:
     language: str = "ru-RU"
     preprocess: bool = True
     max_image_dim: int = 3000
-    crop: Optional[List[float]] = None      # [x1,y1,x2,y2] в долях 0..1
-    log_title_keyword: str = "летопис"      # "" — проверка выключена
+    crop: Optional[List[float]] = None              # область чтения летописи
+    verify_crop: Optional[List[float]] = None       # область проверки «летопись открыта»
+    log_markers: List[str] = field(default_factory=lambda: ["летопис", "журнал"])
 
 
 @dataclass
@@ -236,6 +240,7 @@ class LoopConfig:
     warmup_sec: float = 5.0
     pause_between_attempts_sec: float = 3.0
     esc_after_read_sec: float = 0.3
+    log_check_retries: int = 2    # попыток подряд без летописи до аварии
 
 
 @dataclass
@@ -318,6 +323,15 @@ def parse_config_dict(d: dict) -> AppConfig:
     from app.keys import parse_key  # noqa: F401  (валидируем ключ)
     parse_key(str(hotkey.get("key", "]")))
 
+    # Маркеры летописи: список, либо одиночное слово (legacy log_title_keyword).
+    markers_raw = ocr.get("log_markers")
+    if markers_raw is None and ocr.get("log_title_keyword") is not None:
+        markers_raw = [ocr.get("log_title_keyword")]
+    markers = []
+    for m in (markers_raw or ["летопис", "журнал"]):
+        if isinstance(m, str) and m.strip():
+            markers.append(m.strip().lower())
+
     cfg = AppConfig(
         hotkey=HotkeyConfig(
             key=str(hotkey.get("key", "]")),
@@ -337,7 +351,8 @@ def parse_config_dict(d: dict) -> AppConfig:
             preprocess=bool(ocr.get("preprocess", True)),
             max_image_dim=int(ocr.get("max_image_dim", 3000)),
             crop=_parse_crop(ocr.get("crop")),
-            log_title_keyword=str(ocr.get("log_title_keyword", "летопис")).strip().lower(),
+            verify_crop=_parse_crop(ocr.get("verify_crop")) or [0.0, 0.0, 1.0, 0.6],
+            log_markers=markers,
         ),
         screenshots=ScreenshotConfig(
             dir=str(shots.get("dir", "screenshots")),
@@ -356,6 +371,7 @@ def parse_config_dict(d: dict) -> AppConfig:
             warmup_sec=float(loop.get("warmup_sec", 5.0)),
             pause_between_attempts_sec=float(loop.get("pause_between_attempts_sec", 3.0)),
             esc_after_read_sec=float(loop.get("esc_after_read_sec", 0.3)),
+            log_check_retries=int(loop.get("log_check_retries", 2)),
         ),
     )
     return cfg

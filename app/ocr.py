@@ -86,20 +86,21 @@ def _preprocess(img: "Image.Image", max_dim: int) -> "Image.Image":
     return gray
 
 
-def prepare_for_ocr(image_path: str, cfg) -> str:
+def prepare_for_ocr(image_path: str, cfg, crop=None) -> str:
     """Возвращает путь к изображению, готовому для OCR.
 
-    Сначала применяется кроп (ocr.crop — область летописи), затем
-    предобработка (ocr.preprocess). Результат сохраняется рядом с исходным
+    Применяется кроп (crop или cfg.ocr.crop — область летописи), затем
+    предобработка (cfg.ocr.preprocess). Результат сохраняется рядом с исходным
     файлом (имя "<исходное>_ocr.png"). Если ничего не настроено — возвращается
     исходный путь.
     """
-    if not cfg.ocr.preprocess and not cfg.ocr.crop:
+    crop = crop if crop is not None else cfg.ocr.crop
+    if not cfg.ocr.preprocess and not crop:
         return image_path
     src = Path(image_path)
     out = src.with_name(src.stem + "_ocr.png")
     with Image.open(src) as img:
-        img = _apply_crop(img, cfg.ocr.crop)
+        img = _apply_crop(img, crop)
         processed = _preprocess(img, cfg.ocr.max_image_dim)
         processed.save(out, format="PNG")
     return str(out)
@@ -163,13 +164,14 @@ def resolve_engine(cfg) -> str:
     return "tesseract"
 
 
-def recognize(image_path: str, cfg) -> Tuple[str, str]:
+def recognize(image_path: str, cfg, crop=None) -> Tuple[str, str]:
     """Распознаёт текст со скриншота. Возвращает (текст, движок).
 
+    crop — опциональный прямоугольник [x1,y1,x2,y2] (переопределяет cfg.ocr.crop).
     Для движка "manual" возвращает ("", "manual") — вызывающий код должен
     сам показать скриншот пользователю и спросить результат.
     """
-    prepared = prepare_for_ocr(image_path, cfg)
+    prepared = prepare_for_ocr(image_path, cfg, crop=crop)
     engine = cfg.ocr.engine
 
     candidates = []

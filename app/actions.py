@@ -110,8 +110,8 @@ class ActionRunner:
                 return hwnd
         return None
 
-    def run(self) -> None:
-        """Выполняет все действия.
+    def run(self) -> Optional[int]:
+        """Выполняет все действия и возвращает HWND окна игры (или None).
 
         Если задан target_window_title/target_window_process — сначала
         активирует окно игры, иначе работает в текущем (активном) окне.
@@ -127,3 +127,4 @@ class ActionRunner:
 
         for action in self.actions:
             action.run(self.key_hold_sec)
+        return hwnd
