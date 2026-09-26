@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# VSCode
+.vscode/*.log
+.vscode/settings.json
+
+# Логи и скриншоты приложения
+logs/
+screenshots/
+screenshots_preview/
+
+# Сборка / дистрибутивы
+build/
+dist/
+*.spec
+
+# Прочее
+.idea/
+.DS_Store
+Thumbs.db
