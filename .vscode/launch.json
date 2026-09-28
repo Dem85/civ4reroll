@@ -1,0 +1,80 @@
+{
+  // Конфигурации запуска Civ4Reroll под отладчиком VSCode (Python Debugger).
+  // Точка входа: python -m app.main  (см. app/main.py, parse_args()).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Civ4Reroll: self-test (без игры)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.main",
+      "args": ["--selftest"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "showReturnValue": true
+    },
+    {
+      "name": "Civ4Reroll: анализ скриншота",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.main",
+      "args": ["--check-image", "${input:imageFile}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "showReturnValue": true
+    },
+    {
+      "name": "Civ4Reroll: фон + хоткей (ожидание)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.main",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "showReturnValue": true
+    },
+    {
+      "name": "Civ4Reroll: цикл сразу (--start)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.main",
+      "args": ["--start"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "showReturnValue": true
+    },
+    {
+      "name": "Civ4Reroll: одна попытка (--once)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.main",
+      "args": ["--once"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "showReturnValue": true
+    },
+    {
+      "name": "Civ4Reroll: отладка скрипта (F5)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "PYTHONIOENCODING": "utf-8" },
+      "showReturnValue": true
+    }
+  ],
+  "inputs": [
+    {
+      "id": "imageFile",
+      "type": "promptString",
+      "description": "Путь к скриншоту летописи (PNG) для распознавания",
+      "default": "image.png"
+    }
+  ]
+}
