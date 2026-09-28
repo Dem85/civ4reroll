@@ -208,8 +208,8 @@ def perform_attempt(cfg, logger) -> dict:
     logger.info("Запуск сценария: загрузка сохранения, пропуск ходов, открытие летописи...")
     hwnd = runner.run()
 
-    # Даём летописи полностью отрисоваться.
-    time.sleep(0.6)
+    # Даём летописи полностью отрисоваться (loop.log_wait_sec).
+    time.sleep(cfg.loop.log_wait_sec)
 
     # Проверка фокуса: скриншот и esc должны идти только в окно игры.
     game_focused = True
@@ -250,25 +250,38 @@ def perform_attempt(cfg, logger) -> dict:
                 "text": "", "screenshot": str(shot_path),
                 "game_focused": game_focused, "hwnd": hwnd}
 
-    # OCR по области чтения летописи.
+    # OCR: ансамбль вариантов предобработки (основной + ocr.variants).
     try:
-        text, eng = ocr_mod.recognize(str(shot_path), cfg)
+        ocr_results = ocr_mod.recognize_variants(str(shot_path), cfg)
     except ocr_mod.OcrError as exc:
         logger.error("OCR не удался: %s", exc)
         return {"status": "ocr_error", "found": False, "matches": [], "engine": "?",
                 "text": "", "screenshot": str(shot_path),
                 "game_focused": game_focused, "hwnd": hwnd}
+    if not ocr_results:
+        logger.error("OCR не вернул ни одного текста.")
+        return {"status": "ocr_error", "found": False, "matches": [], "engine": "?",
+                "text": "", "screenshot": str(shot_path),
+                "game_focused": game_focused, "hwnd": hwnd}
 
-    logger.info("Распознано символов: %d (движок: %s)", len(text), eng)
-    logger.info("Текст летописи:\n%s", text)
-    if len(text) < 10:
+    texts = [t for t, _ in ocr_results]
+    engines = [e for _, e in ocr_results]
+    main_text = max(texts, key=len)
+    logger.info(
+        "Распознано символов: %d (движок: %s, вариантов: %d)",
+        len(main_text), engines[0], len(texts),
+    )
+    for i, t in enumerate(texts):
+        logger.info("  OCR вариант %d (%s): %d символов", i + 1, engines[i], len(t))
+    logger.info("Текст летописи:\n%s", main_text)
+    if len(main_text) < 10:
         logger.warning(
             "Текста почти нет (%d символов) — возможно, летопись не открылась "
-            "или скриншот снят не с того окна.", len(text)
+            "или скриншот снят не с того окна.", len(main_text)
         )
 
-    # Проверка: открыта ли летопись (маркеры в основном кропе).
-    if not _log_markers_found(text, cfg):
+    # Проверка: открыта ли летопись (маркеры в любом из вариантов).
+    if not any(_log_markers_found(t, cfg) for t in texts):
         try:
             text2, eng2 = ocr_mod.recognize(
                 str(shot_path), cfg, crop=cfg.ocr.verify_crop
@@ -276,26 +289,38 @@ def perform_attempt(cfg, logger) -> dict:
         except ocr_mod.OcrError as exc:
             logger.warning("Дополнительный OCR (verify_crop) не удался: %s", exc)
             return {"status": "no_log", "found": False, "matches": [],
-                    "engine": eng, "text": text, "screenshot": str(shot_path),
+                    "engine": engines[0], "text": main_text,
+                    "screenshot": str(shot_path),
                     "game_focused": game_focused, "hwnd": hwnd}
         if _log_markers_found(text2, cfg):
             logger.info(
                 "Маркер летописи найден на расширенной области (%d символов) — "
                 "летопись открыта.", len(text2)
             )
-            text, eng = text2, eng2
+            texts.append(text2)
+            engines.append(eng2)
         else:
             logger.warning(
                 "Маркеры %r не найдены в распознанном тексте — летопись не видна.",
                 cfg.ocr.log_markers,
             )
             return {"status": "no_log", "found": False, "matches": [],
-                    "engine": eng, "text": text, "screenshot": str(shot_path),
+                    "engine": engines[0], "text": main_text,
+                    "screenshot": str(shot_path),
                     "game_focused": game_focused, "hwnd": hwnd}
 
-    matches = events_mod.find_interesting_events(text, cfg)
+    # Поиск событий по всем вариантам OCR, объединение без дублей.
+    matches = []
+    seen = set()
+    for t in texts:
+        for m in events_mod.find_interesting_events(t, cfg):
+            key = (m.name, m.city)
+            if key not in seen:
+                seen.add(key)
+                matches.append(m)
     return {"status": "ok", "found": bool(matches), "matches": matches,
-            "engine": eng, "text": text, "screenshot": str(shot_path),
+            "engine": engines[0], "text": main_text,
+            "screenshot": str(shot_path),
             "game_focused": game_focused, "hwnd": hwnd}
 
 
@@ -575,6 +600,8 @@ def selftest(cfg, cfg_path, logger) -> int:
     print(f"Область OCR (crop)       : {cfg.ocr.crop or 'весь экран'}")
     print(f"Область проверки         : {cfg.ocr.verify_crop or 'весь экран'}")
     print(f"Маркеры летописи         : {cfg.ocr.log_markers or 'выключено'}")
+    print(f"Ансамбль OCR             : {cfg.ocr.variants or 'выключен'}")
+    print(f"Пауза после летописи     : {cfg.loop.log_wait_sec:.1f} с")
     print(f"Повторов до аварии       : {cfg.loop.log_check_retries}")
     print(f"Ожидание окна            : {cfg.loop.window_wait_sec:.0f} с "
           f"(проверка каждые {cfg.loop.window_check_interval_sec:.1f} с)")

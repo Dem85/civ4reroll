@@ -140,12 +140,16 @@ DEFAULT_CONFIG_DICT = {
         "crop": [0.0, 0.15, 1.0, 0.45],
         "verify_crop": [0.0, 0.0, 1.0, 0.6],
         "log_markers": ["летопис", "журнал"],
+        "variants": ["adaptive"],
         "comment": (
             "engine: auto | windows | tesseract | manual. crop: область чтения "
             "летописи, verify_crop: более широкая область для проверки, что "
             "летопись открыта. log_markers: если НИ ОДНОГО маркера нет в "
             "распознанном тексте (основной кроп + verify_crop) — попытка не "
-            "засчитывается, авария только после loop.log_check_retries подряд."
+            "засчитывается, авария только после loop.log_check_retries подряд. "
+            "variants: ансамбль OCR — дополнительные варианты предобработки "
+            "(сейчас: adaptive), события ищутся во всех вариантах и "
+            "объединяются."
         ),
     },
     "screenshots": {
@@ -174,6 +178,7 @@ DEFAULT_CONFIG_DICT = {
         "log_check_retries": 2,
         "window_wait_sec": 300.0,
         "window_check_interval_sec": 0.5,
+        "log_wait_sec": 1.2,
         "comment": (
             "max_attempts: 0 — бесконечно (остановка Ctrl+C или при находке). "
             "log_check_retries: сколько попыток ПОДРЯД можно не обнаружить "
@@ -181,7 +186,8 @@ DEFAULT_CONFIG_DICT = {
             "по умолчанию 0 — отсчёт не нужен, программа сама ждёт окно игры "
             "перед каждым действием. window_wait_sec: сколько ждать появления "
             "окна и переключения на него; window_check_interval_sec: частота "
-            "проверок."
+            "проверок. log_wait_sec: пауза после открытия летописи, чтобы она "
+            "полностью отрисовалась (улучшает OCR)."
         ),
     },
     "menu": {
@@ -256,6 +262,7 @@ class OcrConfig:
     crop: Optional[List[float]] = None              # область чтения летописи
     verify_crop: Optional[List[float]] = None       # область проверки «летопись открыта»
     log_markers: List[str] = field(default_factory=lambda: ["летопис", "журнал"])
+    variants: List[str] = field(default_factory=list)  # ансамбль: доп. варианты предобработки
 
 
 @dataclass
@@ -283,6 +290,7 @@ class LoopConfig:
     log_check_retries: int = 2    # попыток подряд без летописи до аварии
     window_wait_sec: float = 300.0        # таймаут ожидания появления/активации окна
     window_check_interval_sec: float = 0.5  # частота проверки окна, сек
+    log_wait_sec: float = 1.2     # пауза после открытия летописи (для полной отрисовки)
 
 
 @dataclass
@@ -412,6 +420,8 @@ def parse_config_dict(d: dict) -> AppConfig:
             crop=_parse_crop(ocr.get("crop")),
             verify_crop=_parse_crop(ocr.get("verify_crop")) or [0.0, 0.0, 1.0, 0.6],
             log_markers=markers,
+            variants=[str(v).strip().lower() for v in ocr.get("variants", [])
+                      if isinstance(v, str) and v.strip()],
         ),
         screenshots=ScreenshotConfig(
             dir=str(shots.get("dir", "screenshots")),
@@ -433,6 +443,7 @@ def parse_config_dict(d: dict) -> AppConfig:
             log_check_retries=int(loop.get("log_check_retries", 2)),
             window_wait_sec=float(loop.get("window_wait_sec", 300.0)),
             window_check_interval_sec=float(loop.get("window_check_interval_sec", 0.5)),
+            log_wait_sec=float(loop.get("log_wait_sec", 1.2)),
         ),
         menu=MenuConfig(
             enabled=bool(menu.get("enabled", True)),
