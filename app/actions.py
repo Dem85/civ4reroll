@@ -103,32 +103,116 @@ def find_target_window(window_title: Optional[str], window_process: Optional[str
     return None
 
 
+class WindowNotReadyError(RuntimeError):
+    """Окно игры не появилось или не стало активным в течение таймаута."""
+
+
 class ActionRunner:
-    """Выполняет последовательность действий сценария (синхронно)."""
+    """Выполняет последовательность действий сценария (синхронно).
+
+    Перед КАЖДЫМ действием проверяет, что целевое окно игры существует и
+    активно (foreground). Если окна нет — ждёт его появления; если окно не
+    активно — пытается активировать и ждёт (в пределах wait_window_sec).
+    """
 
     def __init__(self, actions: List[Action], key_hold_sec: float = 0.02,
                  target_window_title: Optional[str] = None,
-                 target_window_process: Optional[str] = None) -> None:
+                 target_window_process: Optional[str] = None,
+                 skip_first_esc: bool = False,
+                 wait_window_sec: float = 300.0,
+                 check_interval_sec: float = 0.5,
+                 on_wait=None) -> None:
         self.actions = actions
         self.key_hold_sec = key_hold_sec
         self.target_window_title = target_window_title
         self.target_window_process = target_window_process
+        # True: пропустить ПЕРВОЕ действие "esc" (меню игры уже открыто).
+        self.skip_first_esc = skip_first_esc
+        self.wait_window_sec = max(1.0, wait_window_sec)
+        self.check_interval_sec = max(0.1, check_interval_sec)
+        # Колбэк для сообщений ожидания (например, logger.info).
+        self.on_wait = on_wait
+
+    def _notify(self, msg: str) -> None:
+        if self.on_wait is not None:
+            self.on_wait(msg)
+
+    def _find_or_wait_window(self) -> Optional[int]:
+        """Ищет окно игры; если не найдено — ждёт его появления."""
+        deadline = time.time() + self.wait_window_sec
+        last_log = 0.0
+        while True:
+            hwnd = find_target_window(self.target_window_title, self.target_window_process)
+            if hwnd is not None:
+                return hwnd
+            if not (self.target_window_title or self.target_window_process):
+                return None
+            now = time.time()
+            if now > deadline:
+                raise WindowNotReadyError(
+                    f"Окно игры не появилось за {self.wait_window_sec:.0f} с "
+                    f"(заголовок: {self.target_window_title!r}, "
+                    f"процесс: {self.target_window_process!r}). Запустите игру."
+                )
+            if now - last_log >= 5.0:
+                last_log = now
+                self._notify("Окно игры не найдено — жду его появления...")
+            time.sleep(self.check_interval_sec)
+
+    def _ensure_active(self, hwnd) -> Optional[int]:
+        """Ждёт, пока окно игры окажется в фокусе (foreground).
+
+        Ничего не активирует и не разворачивает: если окно свёрнуто или не в
+        фокусе — просто ждём, пока пользователь сам переключится на него.
+        HWND перепроверяется на каждой итерации: если окно было пересоздано
+        (игра сменила HWND) — берём актуальный. Возвращает актуальный HWND.
+        Логирование — не чаще одного раза в 5 секунд (чтобы не спамить лог).
+        """
+        if not hwnd:
+            return None
+        deadline = time.time() + self.wait_window_sec
+        last_log = 0.0
+        while True:
+            # Окно могло быть пересоздано (HWND изменился) — перепроверяем.
+            fresh = find_target_window(self.target_window_title, self.target_window_process)
+            if fresh is None:
+                fresh = self._find_or_wait_window()
+            hwnd = fresh
+            if winapi.foreground_window() == hwnd:
+                return hwnd
+            now = time.time()
+            if now > deadline:
+                raise WindowNotReadyError(
+                    f"Окно игры не стало активным за {self.wait_window_sec:.0f} с "
+                    f"(сейчас активно: {winapi.foreground_window_title()!r}). "
+                    "Переключитесь в окно игры."
+                )
+            if now - last_log >= 5.0:
+                last_log = now
+                self._notify("Окно игры не в фокусе или свёрнуто — жду...")
+            time.sleep(self.check_interval_sec)
 
     def run(self) -> Optional[int]:
         """Выполняет все действия и возвращает HWND окна игры (или None).
 
-        Если задан target_window_title/target_window_process — сначала
-        активирует окно игры, иначе работает в текущем (активном) окне.
+        Если задан target_window_title/target_window_process — сначала ждёт
+        появления окна и переключения на него (фокус), иначе работает в
+        текущем окне. Перед каждым действием фокус окна проверяется заново
+        (HWND обновляется, если окно пересоздано).
+        При skip_first_esc=True первое действие "key: esc" пропускается —
+        оно открывает меню игры, которое уже открыто.
         """
-        hwnd = find_target_window(self.target_window_title, self.target_window_process)
+        hwnd = self._find_or_wait_window()
         if hwnd:
-            winapi.activate_window(hwnd)
-        elif self.target_window_title or self.target_window_process:
-            raise RuntimeError(
-                f"Окно игры не найдено (заголовок: {self.target_window_title!r}, "
-                f"процесс: {self.target_window_process!r}). Запустите игру."
-            )
+            hwnd = self._ensure_active(hwnd)
 
+        esc_skipped = not self.skip_first_esc
         for action in self.actions:
+            if not esc_skipped and action.type == "key" \
+                    and action.key and action.key.strip().lower() == "esc":
+                esc_skipped = True
+                continue
+            if hwnd:
+                hwnd = self._ensure_active(hwnd)
             action.run(self.key_hold_sec)
         return hwnd

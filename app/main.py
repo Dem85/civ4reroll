@@ -32,7 +32,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import events as events_mod   # noqa: E402
 from app import ocr as ocr_mod         # noqa: E402
 from app import screen, winapi         # noqa: E402
-from app.actions import ActionRunner, find_target_window  # noqa: E402
+from app.actions import (              # noqa: E402
+    ActionRunner,
+    WindowNotReadyError,
+    find_target_window,
+)
 from app.config import load_config     # noqa: E402
 from app.hotkey import HotkeyListener  # noqa: E402
 from app.keys import parse_key         # noqa: E402
@@ -81,6 +85,86 @@ def _log_markers_found(text: str, cfg) -> bool:
     return False
 
 
+def _menu_is_open(screenshot_path: str, cfg, logger) -> bool:
+    """Проверяет по скриншоту, открыто ли игровое меню (правый верхний угол).
+
+    Меню паузы Civ4 — колонка кнопок справа сверху («Выйти в главное меню»,
+    «Сохранить игру», «Настройки», «Отмена» и т.п.). Если в OCR-тексте области
+    cfg.menu.crop найден хотя бы один cfg.menu.markers — меню открыто.
+    """
+    if not cfg.menu.enabled or not cfg.menu.markers:
+        return False
+    try:
+        text, eng = ocr_mod.recognize(screenshot_path, cfg, crop=cfg.menu.crop)
+    except ocr_mod.OcrError as exc:
+        logger.warning("OCR проверки меню не удался (%s) — считаем меню закрытым.", exc)
+        return False
+    for marker in cfg.menu.markers:
+        if events_mod.text_has_keyword(text, marker, fuzzy=cfg.menu.fuzzy,
+                                       min_ratio=cfg.menu.min_ratio):
+            logger.info(
+                "Меню игры открыто: найден маркер %r (движок %s). Текст области: %r",
+                marker, eng, text[:120],
+            )
+            return True
+    logger.debug("Меню не обнаружено. Текст области: %r", text[:120])
+    return False
+
+
+def _wait_game_window(cfg, logger):
+    """Ждёт, пока появится и станет активным окно игры.
+
+    Возвращает HWND окна или None (если target не задан — работаем
+    в текущем активном окне). Если окно не появилось / не активировалось
+    в течение loop.window_wait_sec — бросает WindowNotReadyError.
+    """
+    if not (cfg.game.window_title or cfg.game.window_process):
+        return None
+
+    wait_sec = max(1.0, cfg.loop.window_wait_sec)
+    interval = max(0.1, cfg.loop.window_check_interval_sec)
+    deadline = time.time() + wait_sec
+    last_log = 0.0
+
+    # Фаза 1: окно должно появиться.
+    while True:
+        hwnd = find_target_window(cfg.game.window_title, cfg.game.window_process)
+        if hwnd:
+            break
+        if time.time() > deadline:
+            raise WindowNotReadyError(
+                f"Окно игры не появилось за {wait_sec:.0f} с "
+                f"(заголовок: {cfg.game.window_title!r}, "
+                f"процесс: {cfg.game.window_process!r}). Запустите игру."
+            )
+        now = time.time()
+        if now - last_log >= 5.0:
+            last_log = now
+            logger.info("Окно игры не найдено — жду его появления...")
+        time.sleep(interval)
+
+    # Фаза 2: окно должно оказаться в фокусе (foreground). Разворачивать и
+    # активировать окно не пытаемся — просто ждём, пока пользователь сам
+    # переключится на него. HWND перепроверяется: игра может пересоздать окно.
+    while True:
+        fresh = find_target_window(cfg.game.window_title, cfg.game.window_process)
+        if fresh is not None:
+            hwnd = fresh
+        if winapi.foreground_window() == hwnd:
+            return hwnd
+        if time.time() > deadline:
+            raise WindowNotReadyError(
+                f"Окно игры не стало активным за {wait_sec:.0f} с "
+                f"(сейчас активно: {winapi.foreground_window_title()!r}). "
+                "Переключитесь в окно игры."
+            )
+        now = time.time()
+        if now - last_log >= 5.0:
+            last_log = now
+            logger.info("Окно игры не в фокусе или свёрнуто — жду...")
+        time.sleep(interval)
+
+
 def perform_attempt(cfg, logger) -> dict:
     """Выполняет одну попытку: сценарий -> скриншот -> OCR -> поиск событий.
 
@@ -91,11 +175,34 @@ def perform_attempt(cfg, logger) -> dict:
     shots_dir = Path(cfg.screenshots.dir)
     shots_dir.mkdir(parents=True, exist_ok=True)
 
+    # Ждём появления и активации окна игры — скриншот проверки меню должен
+    # сниматься именно с окна игры (окончательно окно ждёт runner.run()).
+    hwnd = _wait_game_window(cfg, logger)
+
+    # Проверка: открыто ли уже игровое меню (тогда первый esc сценария не нужен).
+    menu_open = False
+    if cfg.menu.enabled:
+        try:
+            pre_img = screen.capture(cfg.screenshots.capture)
+            pre_path = shots_dir / "menu_check.png"
+            screen.save(pre_img, str(pre_path))
+            menu_open = _menu_is_open(str(pre_path), cfg, logger)
+        except Exception as exc:
+            logger.warning(
+                "Не удалось проверить состояние меню (%s) — считаем меню закрытым.", exc
+            )
+        if menu_open:
+            logger.info("Меню игры уже открыто — первый esc сценария будет пропущен.")
+
     runner = ActionRunner(
         actions=cfg.profile.actions,
         key_hold_sec=cfg.game.key_hold_sec,
         target_window_title=cfg.game.window_title,
         target_window_process=cfg.game.window_process,
+        skip_first_esc=menu_open,
+        wait_window_sec=cfg.loop.window_wait_sec,
+        check_interval_sec=cfg.loop.window_check_interval_sec,
+        on_wait=logger.info,
     )
 
     logger.info("Запуск сценария: загрузка сохранения, пропуск ходов, открытие летописи...")
@@ -192,9 +299,20 @@ def perform_attempt(cfg, logger) -> dict:
             "game_focused": game_focused, "hwnd": hwnd}
 
 
-def press_esc_close_log(cfg) -> None:
-    """Нажимает esc — скрывает летопись (последний esc из multikey-сценария)."""
+def press_esc_close_log(cfg, logger=None) -> None:
+    """Нажимает esc — скрывает летопись (последний esc из multikey-сценария).
+
+    Перед esc ждёт, пока окно игры активно; если окно недоступно в течение
+    таймаута — esc не отправляется (в лог пишется предупреждение).
+    """
+    if logger is None:
+        logger = logging.getLogger(LOG_NAME)
     time.sleep(cfg.loop.esc_after_read_sec)
+    try:
+        _wait_game_window(cfg, logger)
+    except WindowNotReadyError as exc:
+        logger.warning("esc не отправлен: %s", exc)
+        return
     winapi.send_key(parse_key("esc"), cfg.game.key_hold_sec)
     time.sleep(0.2)
 
@@ -207,24 +325,6 @@ def save_attempt_screenshot(cfg, shot_path: str, suffix: str, attempt: int) -> N
     dst = src.parent / f"{suffix}_{attempt:03d}{src.suffix}"
     dst.write_bytes(src.read_bytes())
     logging.getLogger(LOG_NAME).info("Скриншот сохранён: %s", dst.resolve())
-
-
-def _target_window_present(cfg, logger) -> bool:
-    """Проверяет наличие целевого окна/процесса игры.
-
-    Если window_title/window_process не заданы (режим «текущее окно») —
-    всегда True. Иначе: окно должно существовать, иначе False.
-    """
-    if not (cfg.game.window_title or cfg.game.window_process):
-        return True
-    if find_target_window(cfg.game.window_title, cfg.game.window_process) is None:
-        logger.error(
-            "Целевой процесс/окно игры не найден "
-            "(заголовок: %r, процесс: %r) — остановка.",
-            cfg.game.window_title, cfg.game.window_process,
-        )
-        return False
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -246,9 +346,12 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             winapi.foreground_window_title(),
         )
 
-    # Останавливаемся сразу, если целевой процесс/окно игры отсутствует.
-    if not _target_window_present(cfg, logger):
-        return 2
+    if cfg.game.window_title or cfg.game.window_process:
+        logger.info(
+            "Окно игры будет ожидаться перед каждым действием "
+            "(таймаут %.0f с, проверка каждые %.1f с).",
+            cfg.loop.window_wait_sec, cfg.loop.window_check_interval_sec,
+        )
 
     max_attempts = 1 if once else cfg.loop.max_attempts
     if not once and cfg.loop.warmup_sec > 0:
@@ -269,15 +372,17 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
         if stop_event is not None and stop_event.is_set():
             logger.info("Остановлено по хоткею после попытки %d.", attempt)
             return 0
-        # Целевой процесс исчез (игра закрыта) — останавливаемся.
-        if not _target_window_present(cfg, logger):
-            return 2
         attempt += 1
         limit_label = "∞" if max_attempts == 0 else str(max_attempts)
         logger.info("=== Попытка %d/%s ===", attempt, limit_label)
 
         try:
             res = perform_attempt(cfg, logger)
+        except WindowNotReadyError as exc:
+            # Окно игры недоступно — ждём дальше, не засчитывая попытку.
+            logger.warning("%s Жду следующей попытки...", exc)
+            time.sleep(cfg.loop.pause_between_attempts_sec)
+            continue
         except RuntimeError as exc:
             logger.error("Ошибка выполнения сценария: %s", exc)
             logger.error(
@@ -471,6 +576,10 @@ def selftest(cfg, cfg_path, logger) -> int:
     print(f"Область проверки         : {cfg.ocr.verify_crop or 'весь экран'}")
     print(f"Маркеры летописи         : {cfg.ocr.log_markers or 'выключено'}")
     print(f"Повторов до аварии       : {cfg.loop.log_check_retries}")
+    print(f"Ожидание окна            : {cfg.loop.window_wait_sec:.0f} с "
+          f"(проверка каждые {cfg.loop.window_check_interval_sec:.1f} с)")
+    print(f"Проверка меню            : {'включена' if cfg.menu.enabled else 'выключена'}"
+          f"{f' (crop={cfg.menu.crop}, маркеров: {len(cfg.menu.markers)})' if cfg.menu.enabled else ''}")
     print(f"Интересных событий       : {len(cfg.events.items)} "
           f"({', '.join(i.name for i in cfg.events.items)})")
 

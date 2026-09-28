@@ -22,11 +22,6 @@ user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
 user32.GetWindowTextLengthW.restype = ctypes.c_int
 user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 user32.GetWindowTextW.restype = ctypes.c_int
-user32.IsIconic.argtypes = [wintypes.HWND]
-user32.IsIconic.restype = wintypes.BOOL
-user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
-user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-user32.SetForegroundWindow.restype = wintypes.BOOL
 
 INPUT_KEYBOARD = 1
 INPUT_MOUSE = 0
@@ -328,13 +323,6 @@ def find_window_by_process(process_name: str):
 
     user32.EnumWindows(enum_proc, 0)
     return found[0] if found else None
-
-
-def activate_window(hwnd) -> None:
-    """Разворачивает (если свёрнуто) и выводит окно на передний план."""
-    if user32.IsIconic(hwnd):
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-    user32.SetForegroundWindow(hwnd)
 
 
 def key_pressed(vk: int) -> bool:

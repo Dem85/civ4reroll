@@ -67,6 +67,18 @@ DEFAULT_ACTIONS = [
     {"type": "key", "key": "enter", "delay": 2.0},
 ]
 
+# Маркеры открытого игрового меню (пункты меню паузы Civ4 в правом верхнем углу).
+DEFAULT_MENU_MARKERS = [
+    "выйти",
+    "отмена",
+    "сохранить игру",
+    "настройки",
+    "главное меню",
+    "завершить игру",
+    "сведения об игре",
+    "ваши данные",
+]
+
 # Интересные события по умолчанию (находки ресурсов в шахтах).
 DEFAULT_EVENT_ITEMS = [
     {"name": "Золото", "keywords": ["золото"]},
@@ -156,14 +168,42 @@ DEFAULT_CONFIG_DICT = {
     },
     "loop": {
         "max_attempts": 0,
-        "warmup_sec": 5.0,
+        "warmup_sec": 0.0,
         "pause_between_attempts_sec": 3.0,
         "esc_after_read_sec": 0.3,
         "log_check_retries": 2,
+        "window_wait_sec": 300.0,
+        "window_check_interval_sec": 0.5,
         "comment": (
             "max_attempts: 0 — бесконечно (остановка Ctrl+C или при находке). "
             "log_check_retries: сколько попыток ПОДРЯД можно не обнаружить "
-            "летопись, прежде чем сработает аварийная остановка."
+            "летопись, прежде чем сработает аварийная остановка. warmup_sec: "
+            "по умолчанию 0 — отсчёт не нужен, программа сама ждёт окно игры "
+            "перед каждым действием. window_wait_sec: сколько ждать появления "
+            "окна и переключения на него; window_check_interval_sec: частота "
+            "проверок."
+        ),
+    },
+    "menu": {
+        "enabled": True,
+        "crop": [0.5, 0.0, 1.0, 0.6],
+        "markers": [
+            "выйти",
+            "отмена",
+            "сохранить игру",
+            "настройки",
+            "главное меню",
+            "завершить игру",
+            "сведения об игре",
+            "ваши данные"
+        ],
+        "fuzzy": True,
+        "min_ratio": 0.65,
+        "comment": (
+            "Проверка перед каждым сценарием: со скриншота правого верхнего "
+            "угла (menu.crop) OCR ищет пункты игрового меню (menu.markers). "
+            "Если меню уже открыто — первый esc сценария пропускается "
+            "(иначе он закрыл бы меню). enabled=false отключает проверку."
         ),
     },
 }
@@ -237,10 +277,27 @@ class LogConfig:
 @dataclass
 class LoopConfig:
     max_attempts: int = 0         # 0 = бесконечно
-    warmup_sec: float = 5.0
+    warmup_sec: float = 0.0       # отсчёт перед стартом (0 — не нужен, окно ждём сами)
     pause_between_attempts_sec: float = 3.0
     esc_after_read_sec: float = 0.3
     log_check_retries: int = 2    # попыток подряд без летописи до аварии
+    window_wait_sec: float = 300.0        # таймаут ожидания появления/активации окна
+    window_check_interval_sec: float = 0.5  # частота проверки окна, сек
+
+
+@dataclass
+class MenuConfig:
+    """Проверка «открыто ли игровое меню» перед выполнением сценария.
+
+    Если меню уже открыто — первый esc сценария пропускается (иначе он
+    закрыл бы меню). Меню ищется OCR-ом по правому верхнему углу скриншота
+    (crop) среди маркеров markers.
+    """
+    enabled: bool = True
+    crop: Optional[List[float]] = field(default_factory=lambda: [0.5, 0.0, 1.0, 0.6])
+    markers: List[str] = field(default_factory=lambda: list(DEFAULT_MENU_MARKERS))
+    fuzzy: bool = True
+    min_ratio: float = 0.65
 
 
 @dataclass
@@ -253,6 +310,7 @@ class AppConfig:
     screenshots: ScreenshotConfig
     log: LogConfig
     loop: LoopConfig
+    menu: MenuConfig
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +369,7 @@ def parse_config_dict(d: dict) -> AppConfig:
     shots = d.get("screenshots", {})
     log = d.get("log", {})
     loop = d.get("loop", {})
+    menu = d.get("menu", {})
 
     ocr_engine = str(ocr.get("engine", "auto")).lower()
     if ocr_engine not in ("auto", "windows", "tesseract", "manual"):
@@ -368,10 +427,20 @@ def parse_config_dict(d: dict) -> AppConfig:
         ),
         loop=LoopConfig(
             max_attempts=int(loop.get("max_attempts", 0)),
-            warmup_sec=float(loop.get("warmup_sec", 5.0)),
+            warmup_sec=float(loop.get("warmup_sec", 0.0)),
             pause_between_attempts_sec=float(loop.get("pause_between_attempts_sec", 3.0)),
             esc_after_read_sec=float(loop.get("esc_after_read_sec", 0.3)),
             log_check_retries=int(loop.get("log_check_retries", 2)),
+            window_wait_sec=float(loop.get("window_wait_sec", 300.0)),
+            window_check_interval_sec=float(loop.get("window_check_interval_sec", 0.5)),
+        ),
+        menu=MenuConfig(
+            enabled=bool(menu.get("enabled", True)),
+            crop=_parse_crop(menu.get("crop")) or [0.5, 0.0, 1.0, 0.6],
+            markers=[m.strip().lower() for m in menu.get("markers", [])
+                     if isinstance(m, str) and m.strip()] or list(DEFAULT_MENU_MARKERS),
+            fuzzy=bool(menu.get("fuzzy", True)),
+            min_ratio=float(menu.get("min_ratio", 0.65)),
         ),
     )
     return cfg
