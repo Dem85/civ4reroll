@@ -124,7 +124,7 @@
         "x": 1100,
         "y": 130,
         "relative": true,
-        "delay": 0.4
+        "delay": 0.6
       },
       {
         "type": "click",
@@ -206,7 +206,7 @@
   "relaunch": {
     "enabled": true,
     "shortcut": "C:\\Users\\dem29\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Steam\\Sid Meier's Civilization IV Beyond the Sword.url",
-    "wait_sec": 10.0,
+    "wait_sec": 15.0,
     "actions": [
       { "type": "move", "x": 50, "y": 50, "relative": true, "delay": 0.1 },
       { "type": "key", "key": "esc", "delay": 0.5 },
@@ -228,7 +228,7 @@
       { "type": "key", "key": "enter", "delay": 1.0 },
       { "type": "key", "key": "enter", "delay": 0.2 },
       { "type": "key", "key": "enter", "delay": 0.2 },
-      { "type": "move", "x": 1100, "y": 130, "relative": true, "delay": 1.0 },
+      { "type": "move", "x": 1100, "y": 130, "relative": true, "delay": 2.0 },
       { "type": "click", "button": "left", "delay": 0.2 },
       { "type": "key", "key": "enter", "delay": 0.5 },
       { "type": "key", "key": "enter", "delay": 0.5 },
@@ -327,6 +327,12 @@
     "save_success": true,
     "save_fail": true,
     "comment": "capture: window (область активного окна, как в multikey) | fullscreen (весь экран). save_fail: сохранять скриншоты неудачных попыток (для диагностики)."
+  },
+  "saved": {
+    "enabled": true,
+    "dir": "saved",
+    "auto_dir": "C:\\Users\\dem29\\Documents\\My Games\\Beyond the Sword\\Saves\\multi\\auto",
+    "comment": "Копирование последнего по дате автосейва при окончании цикла (находка / лимит / аварийная остановка / остановка хоткеем). Файл копируется из auto_dir в папку dir с тем же номером попытки, что и скриншот в screenshots, например success_042.CivBeyondSwordSave."
   },
   "log": {
     "dir": "logs",

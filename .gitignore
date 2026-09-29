@@ -13,10 +13,11 @@ env/
 .vscode/*.log
 .vscode/settings.json
 
-# Логи и скриншоты приложения
+# Логи, скриншоты приложения и сохранения
 logs/
 screenshots/
 screenshots_preview/
+saved/
 
 # Сборка / дистрибутивы
 build/

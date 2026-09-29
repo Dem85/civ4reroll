@@ -21,10 +21,12 @@
 
 import argparse
 import logging
+import shutil
 import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 # Позволяет запускать и `python app/main.py`, и `python -m app.main`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -42,6 +44,9 @@ from app.hotkey import HotkeyListener  # noqa: E402
 from app.keys import parse_key         # noqa: E402
 
 LOG_NAME = "civ4reroll"
+
+# Расширение файлов сохранения Civilization IV.
+SAVE_EXT = ".CivBeyondSwordSave"
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +509,75 @@ def save_attempt_screenshot(cfg, shot_path: str, suffix: str, attempt: int) -> N
     logging.getLogger(LOG_NAME).info("Скриншот сохранён: %s", dst.resolve())
 
 
+def find_latest_save(cfg) -> Optional[Path]:
+    """Возвращает последний по дате файл .CivBeyondSwordSave из папки автосейвов.
+
+    Ищутся файлы с расширением SAVE_EXT (регистронезависимо); «последний» —
+    с наибольшим временем изменения (mtime). Возвращает None, если папка
+    не существует или в ней нет подходящих файлов.
+    """
+    auto_dir = Path(cfg.saved.auto_dir)
+    if not auto_dir.is_dir():
+        return None
+    try:
+        candidates = [p for p in auto_dir.iterdir()
+                      if p.is_file() and p.suffix.lower() == SAVE_EXT.lower()]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def save_attempt_save(cfg, suffix: str, attempt: int, logger=None) -> Optional[Path]:
+    """Копирует последний автосейв в папку saved при окончании цикла.
+
+    Имя файла — как у скриншота в screenshots (тот же номер попытки),
+    например: success_042.CivBeyondSwordSave <-> success_042.png.
+    Если секция saved.enabled=false, папка пуста или файл не найден —
+    просто возвращает None (с предупреждением в лог).
+    """
+    if logger is None:
+        logger = logging.getLogger(LOG_NAME)
+    if not cfg.saved.enabled:
+        return None
+    src = find_latest_save(cfg)
+    if src is None:
+        logger.warning(
+            "Не найден файл сохранения в %r — копия в '%s' не создана.",
+            cfg.saved.auto_dir, cfg.saved.dir,
+        )
+        return None
+    saved_dir = Path(cfg.saved.dir)
+    saved_dir.mkdir(parents=True, exist_ok=True)
+    dst = saved_dir / f"{suffix}_{attempt:03d}{SAVE_EXT}"
+    try:
+        shutil.copyfile(src, dst)
+    except OSError as exc:
+        logger.error("Не удалось скопировать сохранение %s -> %s: %s", src, dst, exc)
+        return None
+    logger.info("Сохранение скопировано: %s <- %s", dst.resolve(), src.name)
+    return dst
+
+
+def last_attempt_number(cfg) -> int:
+    """Максимальный номер попытки среди пронумерованных скриншотов.
+
+    Нужен для копии автосейва при прерывании Ctrl+C, когда сам цикл
+    не успевает сообщить номер последней попытки.
+    """
+    import re
+    shots_dir = Path(cfg.screenshots.dir)
+    if not shots_dir.is_dir():
+        return 0
+    nums = []
+    for p in shots_dir.glob("*.png"):
+        m = re.search(r"_(\d{3,})\.png$", p.name)
+        if m:
+            nums.append(int(m.group(1)))
+    return max(nums) if nums else 0
+
+
 # ---------------------------------------------------------------------------
 # Цикл реролла
 # ---------------------------------------------------------------------------
@@ -600,6 +674,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
                 )
                 if res.get("game_focused"):
                     press_esc_close_log(cfg, on_game_down=guard.relaunch)
+                save_attempt_save(cfg, "no_log", attempt, logger)
                 return 3
             logger.warning(
                 "%s — попытка не засчитана (%d/%d), повторяю сценарий.",
@@ -607,6 +682,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             )
             if cfg.screenshots.save_fail and res.get("screenshot"):
                 save_attempt_screenshot(cfg, res["screenshot"], "no_log", attempt)
+                save_attempt_save(cfg, "no_log", attempt, logger)
             if res.get("game_focused"):
                 press_esc_close_log(cfg, on_game_down=guard.relaunch)
             time.sleep(cfg.loop.pause_between_attempts_sec)
@@ -622,6 +698,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
                 logger.info("  - %s (город: %s): %s", m.name, m.city or "?", m.sentence)
             if cfg.screenshots.save_success:
                 save_attempt_screenshot(cfg, res["screenshot"], "success", attempt)
+            save_attempt_save(cfg, "success", attempt, logger)
             logger.info("Закрываю летопись (esc) и останавливаюсь.")
             press_esc_close_log(cfg, on_game_down=guard.relaunch)
             logger.info("Готово: интересные события найдены на попытке %d.", attempt)
@@ -630,6 +707,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
         logger.info("Интересных событий не найдено (движок OCR: %s).", res["engine"])
         if cfg.screenshots.save_fail:
             save_attempt_screenshot(cfg, res["screenshot"], "no_events", attempt)
+            save_attempt_save(cfg, "no_events", attempt, logger)
 
         logger.info("Закрываю летопись (esc) и повторяю сценарий заново.")
         press_esc_close_log(cfg, on_game_down=guard.relaunch)
@@ -638,10 +716,12 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             break
         if stop_event is not None and stop_event.is_set():
             logger.info("Остановлено по хоткею после попытки %d.", attempt)
+            save_attempt_save(cfg, "stop", attempt, logger)
             return 0
         time.sleep(cfg.loop.pause_between_attempts_sec)
 
     logger.warning("Достигнут лимит попыток (%d), интересных событий не найдено.", attempt)
+    save_attempt_save(cfg, "no_events", attempt, logger)
     return 1
 
 
@@ -865,7 +945,8 @@ def main(argv=None) -> int:
         try:
             return run_loop(cfg, logger, once=True)
         except KeyboardInterrupt:
-            logger.info("Прервано пользователем (Ctrl+C).")
+            logger.info("Прервано пользователем (Ctrl+C) — сохраняю последний автосейв.")
+            save_attempt_save(cfg, "stop", last_attempt_number(cfg), logger)
             return 0
 
     app = RerollHotkeyApp(cfg, logger)
@@ -882,7 +963,8 @@ def main(argv=None) -> int:
         app.exit_event.wait()
         return app.exit_code
     except KeyboardInterrupt:
-        logger.info("Выход (Ctrl+C).")
+        logger.info("Выход (Ctrl+C) — сохраняю последний автосейв.")
+        save_attempt_save(cfg, "stop", last_attempt_number(cfg), logger)
         return 0
     finally:
         app.stop()

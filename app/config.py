@@ -21,6 +21,11 @@ from app.actions import Action
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELATIVE = "config.json"
 
+# Папка автосейвов Civ4 по умолчанию (используется секцией "saved").
+DEFAULT_SAVE_AUTO_DIR = (
+    r"C:\Users\dem29\Documents\My Games\Beyond the Sword\Saves\multi\auto"
+)
+
 
 # ---------------------------------------------------------------------------
 # Список действий по умолчанию: сценарий из multikey/config.json
@@ -225,6 +230,17 @@ DEFAULT_CONFIG_DICT = {
             "попыток (для диагностики)."
         ),
     },
+    "saved": {
+        "enabled": True,
+        "dir": "saved",
+        "auto_dir": DEFAULT_SAVE_AUTO_DIR,
+        "comment": (
+            "Копирование последнего по дате автосейва при окончании цикла "
+            "(находка / лимит / аварийная остановка / остановка хоткеем). "
+            "Файл копируется из auto_dir в папку dir с тем же номером попытки, "
+            "что и скриншот в screenshots, например success_042.CivBeyondSwordSave."
+        ),
+    },
     "log": {
         "dir": "logs",
         "file": "civ4_reroll.log",
@@ -351,6 +367,20 @@ class ScreenshotConfig:
 
 
 @dataclass
+class SavedConfig:
+    """Копирование последнего автосейва при окончании цикла (секция "saved").
+
+    При завершении цикла (находка / лимит / авария / остановка хоткеем) из
+    auto_dir берётся последний по дате файл .CivBeyondSwordSave и копируется
+    в папку dir с именем как у скриншота в screenshots — тем же номером
+    попытки (например: success_042.CivBeyondSwordSave).
+    """
+    enabled: bool = True
+    dir: str = "saved"
+    auto_dir: str = DEFAULT_SAVE_AUTO_DIR
+
+
+@dataclass
 class LogConfig:
     dir: str = "logs"
     file: str = "civ4_reroll.log"
@@ -393,6 +423,7 @@ class AppConfig:
     events: EventsConfig
     ocr: OcrConfig
     screenshots: ScreenshotConfig
+    saved: SavedConfig
     log: LogConfig
     loop: LoopConfig
     menu: MenuConfig
@@ -459,6 +490,7 @@ def parse_config_dict(d: dict) -> AppConfig:
     relaunch = d.get("relaunch", {})
     ocr = d.get("ocr", {})
     shots = d.get("screenshots", {})
+    saved = d.get("saved", {})
     log = d.get("log", {})
     loop = d.get("loop", {})
     menu = d.get("menu", {})
@@ -527,6 +559,11 @@ def parse_config_dict(d: dict) -> AppConfig:
             keep_all_attempts=bool(shots.get("keep_all_attempts", False)),
             save_success=bool(shots.get("save_success", True)),
             save_fail=bool(shots.get("save_fail", False)),
+        ),
+        saved=SavedConfig(
+            enabled=bool(saved.get("enabled", True)),
+            dir=str(saved.get("dir", "saved")),
+            auto_dir=str(saved.get("auto_dir", DEFAULT_SAVE_AUTO_DIR)),
         ),
         log=LogConfig(
             dir=str(log.get("dir", "logs")),
