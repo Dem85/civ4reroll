@@ -67,6 +67,49 @@ DEFAULT_ACTIONS = [
     {"type": "key", "key": "enter", "delay": 2.0},
 ]
 
+# Действия для ПЕРВОЙ попытки после автозапуска игры (relaunch.actions):
+# тот же сценарий загрузки, что и profile.actions, но с дополнительными esc
+# в начале (игра только что стартовала — могут быть открыты заставки, диалоги
+# или главное меню) и финальным enter перед переходом к обычному циклу.
+DEFAULT_RELAUNCH_ACTIONS = [
+    {"type": "move", "x": 50, "y": 50, "relative": True, "delay": 0.1},
+    {"type": "key", "key": "esc", "delay": 0.5},
+    {"type": "key", "key": "esc", "delay": 0.5},
+    {"type": "key", "key": "esc", "delay": 0.5},
+    {"type": "key", "key": "esc", "delay": 0.5},
+    {"type": "key", "key": "down", "delay": 0.1},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "down", "delay": 0.1},
+    {"type": "key", "key": "down", "delay": 0.1},
+    {"type": "key", "key": "enter", "delay": 0.1},
+    {"type": "key", "key": "tab", "delay": 0.1},
+    {"type": "key", "key": "tab", "delay": 0.1},
+    {"type": "key", "key": "tab", "delay": 0.1},
+    {"type": "key", "key": "tab", "delay": 0.1},
+    {"type": "key", "key": "enter", "delay": 0.1},
+    {"type": "move", "x": 600, "y": 233, "relative": True, "delay": 0.2},
+    {"type": "click", "button": "left", "delay": 0.2},
+    {"type": "key", "key": "enter", "delay": 1.0},
+    {"type": "key", "key": "enter", "delay": 0.2},
+    {"type": "key", "key": "enter", "delay": 0.2},
+    {"type": "move", "x": 1110, "y": 130, "relative": True, "delay": 0.2},
+    {"type": "click", "button": "left", "delay": 0.2},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "ctrl+tab", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 0.5},
+    {"type": "key", "key": "enter", "delay": 2.0},
+]
+
 # Маркеры открытого игрового меню (пункты меню паузы Civ4 в правом верхнем углу).
 DEFAULT_MENU_MARKERS = [
     "выйти",
@@ -120,6 +163,24 @@ DEFAULT_CONFIG_DICT = {
             "чтения скриншота."
         ),
         "actions": DEFAULT_ACTIONS,
+    },
+    "relaunch": {
+        "enabled": True,
+        "shortcut": (
+            r"C:\Users\dem29\AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
+            r"\Steam\Sid Meier's Civilization IV Beyond the Sword.url"
+        ),
+        "wait_sec": 10.0,
+        "actions": DEFAULT_RELAUNCH_ACTIONS,
+        "comment": (
+            "Автозапуск игры, если она не запущена или выключилась: перед "
+            "каждой попыткой проверяется процесс/окно игры; если игры нет — "
+            "запускается shortcut (.url из меню Пуск Steam), ждётся wait_sec "
+            "секунд, окно активируется и вместо profile.actions выполняется "
+            "relaunch.actions (тот же сценарий + дополнительные esc при "
+            "старте). Далее попытка продолжается как обычно (скриншот, "
+            "проверка меню, OCR). enabled=false отключает автозапуск."
+        ),
     },
     "events": {
         "context_keywords": ["шахт", "обнаруж"],
@@ -240,6 +301,21 @@ class Profile:
 
 
 @dataclass
+class RelaunchConfig:
+    """Автоперезапуск игры (опция relaunch).
+
+    Если игра не запущена или выключилась — перед очередной попыткой она
+    запускается через shortcut (.url из меню «Пуск» Steam), затем ждётся
+    wait_sec секунд, окно активируется, и вместо profile.actions выполняется
+    actions (сценарий первой попытки после старта).
+    """
+    enabled: bool = False
+    shortcut: Optional[str] = None     # путь к ярлыку игры (.url)
+    wait_sec: float = 10.0             # пауза после запуска до активации окна
+    actions: List[Action] = field(default_factory=list)
+
+
+@dataclass
 class EventItem:
     name: str
     keywords: List[str]
@@ -313,6 +389,7 @@ class AppConfig:
     hotkey: HotkeyConfig
     game: GameConfig
     profile: Profile
+    relaunch: RelaunchConfig
     events: EventsConfig
     ocr: OcrConfig
     screenshots: ScreenshotConfig
@@ -324,15 +401,21 @@ class AppConfig:
 # ---------------------------------------------------------------------------
 # Загрузка / сохранение
 # ---------------------------------------------------------------------------
+def _parse_actions(raw) -> List[Action]:
+    """Разбирает список словарей действий в объекты Action (с валидацией)."""
+    actions = [Action.from_dict(a) for a in raw]
+    for action in actions:
+        action.validate()
+    return actions
+
+
 def _parse_profile(d: dict) -> Profile:
-    actions = [Action.from_dict(a) for a in d.get("actions", [])]
+    actions = _parse_actions(d.get("actions", []))
     profile = Profile(
         name=str(d.get("name", "civ4-reroll")),
         comment=str(d.get("comment", "")),
         actions=actions,
     )
-    for action in actions:
-        action.validate()
     if not actions:
         raise ValueError("В профиле нет ни одного действия (profile.actions)")
     return profile
@@ -373,6 +456,7 @@ def _parse_crop(raw) -> Optional[List[float]]:
 def parse_config_dict(d: dict) -> AppConfig:
     hotkey = d.get("hotkey", {})
     game = d.get("game", {})
+    relaunch = d.get("relaunch", {})
     ocr = d.get("ocr", {})
     shots = d.get("screenshots", {})
     log = d.get("log", {})
@@ -399,6 +483,14 @@ def parse_config_dict(d: dict) -> AppConfig:
         if isinstance(m, str) and m.strip():
             markers.append(m.strip().lower())
 
+    relaunch_enabled = bool(relaunch.get("enabled", False))
+    relaunch_shortcut = relaunch.get("shortcut")
+    if relaunch_enabled and not (isinstance(relaunch_shortcut, str) and relaunch_shortcut.strip()):
+        raise ValueError(
+            "relaunch.enabled=true требует указать relaunch.shortcut — "
+            "путь к ярлыку игры (.url)"
+        )
+
     cfg = AppConfig(
         hotkey=HotkeyConfig(
             key=str(hotkey.get("key", "]")),
@@ -411,6 +503,12 @@ def parse_config_dict(d: dict) -> AppConfig:
             dpi_aware=bool(game.get("dpi_aware", False)),
         ),
         profile=_parse_profile(d.get("profile", {})),
+        relaunch=RelaunchConfig(
+            enabled=relaunch_enabled,
+            shortcut=relaunch_shortcut,
+            wait_sec=float(relaunch.get("wait_sec", 10.0)),
+            actions=_parse_actions(relaunch.get("actions", [])),
+        ),
         events=_parse_events(d.get("events", {})),
         ocr=OcrConfig(
             engine=ocr_engine,

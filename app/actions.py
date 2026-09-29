@@ -121,7 +121,8 @@ class ActionRunner:
                  skip_first_esc: bool = False,
                  wait_window_sec: float = 300.0,
                  check_interval_sec: float = 0.5,
-                 on_wait=None) -> None:
+                 on_wait=None,
+                 on_game_down=None) -> None:
         self.actions = actions
         self.key_hold_sec = key_hold_sec
         self.target_window_title = target_window_title
@@ -132,6 +133,9 @@ class ActionRunner:
         self.check_interval_sec = max(0.1, check_interval_sec)
         # Колбэк для сообщений ожидания (например, logger.info).
         self.on_wait = on_wait
+        # Колбэк перезапуска игры (опция relaunch): вызывается, когда целевое
+        # окно не найдено. Должен вернуть True, если игру перезапустили.
+        self.on_game_down = on_game_down
 
     def _notify(self, msg: str) -> None:
         if self.on_wait is not None:
@@ -154,10 +158,24 @@ class ActionRunner:
                     f"(заголовок: {self.target_window_title!r}, "
                     f"процесс: {self.target_window_process!r}). Запустите игру."
                 )
+            # Опция relaunch: игра «умерла» (окно исчезло посреди попытки) —
+            # перезапускаем её и продолжаем ждать появления окна.
+            if self._relaunch_on_demand():
+                deadline = time.time() + self.wait_window_sec
+                last_log = 0.0
             if now - last_log >= 5.0:
                 last_log = now
                 self._notify("Окно игры не найдено — жду его появления...")
             time.sleep(self.check_interval_sec)
+
+    def _relaunch_on_demand(self) -> bool:
+        """Вызывает колбэк перезапуска игры (on_game_down), если он задан."""
+        if self.on_game_down is None:
+            return False
+        try:
+            return bool(self.on_game_down())
+        except Exception:
+            return False
 
     def _ensure_active(self, hwnd) -> Optional[int]:
         """Ждёт, пока окно игры окажется в фокусе (foreground).

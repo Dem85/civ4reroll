@@ -10,8 +10,10 @@
 import ctypes
 import time
 from ctypes import wintypes
+from pathlib import Path
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 # Уточняем сигнатуры Win32-функций (важно для корректных типов на x64).
 user32.GetSystemMetrics.restype = ctypes.c_int
@@ -22,6 +24,23 @@ user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
 user32.GetWindowTextLengthW.restype = ctypes.c_int
 user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 user32.GetWindowTextW.restype = ctypes.c_int
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+user32.IsWindowVisible.restype = wintypes.BOOL
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.IsIconic.restype = wintypes.BOOL
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.ShowWindow.restype = wintypes.BOOL
+user32.BringWindowToTop.argtypes = [wintypes.HWND]
+user32.BringWindowToTop.restype = wintypes.BOOL
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.SetForegroundWindow.restype = wintypes.BOOL
+user32.SetActiveWindow.argtypes = [wintypes.HWND]
+user32.SetActiveWindow.restype = wintypes.HWND
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.AttachThreadInput.restype = wintypes.BOOL
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 INPUT_KEYBOARD = 1
 INPUT_MOUSE = 0
@@ -35,6 +54,34 @@ MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_ABSOLUTE = 0x8000
 
 ULONG_PTR = ctypes.c_size_t  # эквивалент ULONG_PTR
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value  # 0xFFFFFFFFFFFFFFFF
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    """Структура записи процесса Toolhelp32 (для перечисления процессов)."""
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+# Точные сигнатуры kernel32 (иначе handle снимка усекается до 32 бит на x64).
+kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+kernel32.Process32FirstW.restype = wintypes.BOOL
+kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+kernel32.Process32NextW.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -256,37 +303,19 @@ def find_window(title_part: str):
     return found[0] if found else None
 
 
-def find_window_by_process(process_name: str):
-    """Ищет видимое главное окно процесса по имени исполняемого файла.
+def _process_pids(process_name: str) -> set:
+    """Возвращает множество PID запущенных процессов с указанным именем exe.
 
-    Например, "Civ4BeyondSword.exe". Сначала собираются PID процессов с
-    нужным именем (Toolhelp32), затем EnumWindows ищет видимое окно с
-    заголовком, принадлежащее одному из этих PID.
+    Имя сравнивается без учёта регистра (например, "Civ4BeyondSword.exe").
     """
     process_name = process_name.strip().lower()
     if not process_name:
-        return None
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-    class PROCESSENTRY32W(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", ctypes.c_wchar * 260),
-        ]
+        return set()
 
     TH32CS_SNAPPROCESS = 0x00000002
     snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-    if snapshot == ctypes.c_void_p(-1).value or snapshot in (0, -1):
-        return None
+    if not snapshot or snapshot == INVALID_HANDLE_VALUE:
+        return set()
 
     pids = set()
     try:
@@ -300,14 +329,24 @@ def find_window_by_process(process_name: str):
                     break
     finally:
         kernel32.CloseHandle(snapshot)
+    return pids
 
+
+def is_process_running(process_name: str) -> bool:
+    """True, если запущен процесс с указанным именем исполняемого файла."""
+    return bool(_process_pids(process_name))
+
+
+def find_window_by_process(process_name: str):
+    """Ищет видимое главное окно процесса по имени исполняемого файла.
+
+    Например, "Civ4BeyondSword.exe". Сначала собираются PID процессов с
+    нужным именем (Toolhelp32), затем EnumWindows ищет видимое окно с
+    заголовком, принадлежащее одному из этих PID.
+    """
+    pids = _process_pids(process_name)
     if not pids:
         return None
-
-    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-    user32.IsWindowVisible.argtypes = [wintypes.HWND]
-    user32.IsWindowVisible.restype = wintypes.BOOL
 
     found = []
 
@@ -323,6 +362,73 @@ def find_window_by_process(process_name: str):
 
     user32.EnumWindows(enum_proc, 0)
     return found[0] if found else None
+
+
+def launch_shortcut(shortcut_path: str) -> None:
+    """Запускает ярлык игры как при двойном клике (ShellExecuteW).
+
+    У .url-ярлыков Steam из файла извлекается строка URL (например,
+    steam://rungameid/8800) и запускается именно она — Steam стартует игру.
+    Для остальных путей просто открывается файл/ссылка стандартным
+    обработчиком Windows.
+    """
+    target = shortcut_path
+    path_obj = Path(shortcut_path)
+    if path_obj.suffix.lower() == ".url" and path_obj.is_file():
+        try:
+            for line in path_obj.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if line.lower().startswith("url="):
+                    target = line[4:].strip()
+                    break
+        except OSError:
+            pass
+    SW_SHOWNORMAL = 1
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None, "open", target, None, None, SW_SHOWNORMAL
+    )
+    if result <= 32:
+        raise OSError(f"ShellExecuteW не смог открыть {target!r} (код {result})")
+
+
+def activate_window(hwnd) -> bool:
+    """Разворачивает (если нужно) и переводит окно в фокус (foreground).
+
+    Использует стандартный приём AttachThreadInput + подмену Alt, чтобы
+    обойти ограничение Windows: SetForegroundWindow разрешён только процессу,
+    получившему последний пользовательский ввод. Возвращает True, если окно
+    стало активным.
+    """
+    if not hwnd:
+        return False
+    try:
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+
+        fg = user32.GetForegroundWindow()
+        fg_thread = wintypes.DWORD()
+        if fg:
+            user32.GetWindowThreadProcessId(fg, ctypes.byref(fg_thread))
+        cur_thread = kernel32.GetCurrentThreadId()
+
+        attached = False
+        if fg and fg_thread.value and fg_thread.value != cur_thread:
+            attached = bool(user32.AttachThreadInput(cur_thread, fg_thread.value, True))
+
+        user32.BringWindowToTop(hwnd)
+        # Трюк с Alt: временное нажатие Alt снимает запрет на смену фокуса.
+        _send(_input_keyboard(vk=0x12))                       # VK_MENU down
+        _send(_input_keyboard(vk=0x12, flags=KEYEVENTF_KEYUP))
+        user32.SetForegroundWindow(hwnd)
+        user32.SetActiveWindow(hwnd)
+
+        if attached:
+            user32.AttachThreadInput(cur_thread, fg_thread.value, False)
+
+        time.sleep(0.15)
+        return user32.GetForegroundWindow() == hwnd
+    except Exception:
+        return False
 
 
 def key_pressed(vk: int) -> bool:

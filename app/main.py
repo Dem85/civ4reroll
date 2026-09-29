@@ -111,12 +111,16 @@ def _menu_is_open(screenshot_path: str, cfg, logger) -> bool:
     return False
 
 
-def _wait_game_window(cfg, logger):
+def _wait_game_window(cfg, logger, on_game_down=None):
     """Ждёт, пока появится и станет активным окно игры.
 
     Возвращает HWND окна или None (если target не задан — работаем
     в текущем активном окне). Если окно не появилось / не активировалось
     в течение loop.window_wait_sec — бросает WindowNotReadyError.
+
+    on_game_down — колбэк перезапуска игры (опция relaunch): вызывается,
+    когда окно не найдено; если он вернул True (игра перезапущена) —
+    таймаут ожидания продлевается.
     """
     if not (cfg.game.window_title or cfg.game.window_process):
         return None
@@ -125,6 +129,14 @@ def _wait_game_window(cfg, logger):
     interval = max(0.1, cfg.loop.window_check_interval_sec)
     deadline = time.time() + wait_sec
     last_log = 0.0
+
+    def _relaunch_on_demand() -> bool:
+        if on_game_down is None:
+            return False
+        try:
+            return bool(on_game_down())
+        except Exception:
+            return False
 
     # Фаза 1: окно должно появиться.
     while True:
@@ -137,6 +149,10 @@ def _wait_game_window(cfg, logger):
                 f"(заголовок: {cfg.game.window_title!r}, "
                 f"процесс: {cfg.game.window_process!r}). Запустите игру."
             )
+        # Опция relaunch: игра «умерла» — перезапускаем её и ждём дальше.
+        if _relaunch_on_demand():
+            deadline = time.time() + wait_sec
+            last_log = 0.0
         now = time.time()
         if now - last_log >= 5.0:
             last_log = now
@@ -150,6 +166,10 @@ def _wait_game_window(cfg, logger):
         fresh = find_target_window(cfg.game.window_title, cfg.game.window_process)
         if fresh is not None:
             hwnd = fresh
+        elif _relaunch_on_demand():
+            deadline = time.time() + wait_sec
+            last_log = 0.0
+            continue
         if winapi.foreground_window() == hwnd:
             return hwnd
         if time.time() > deadline:
@@ -165,8 +185,131 @@ def _wait_game_window(cfg, logger):
         time.sleep(interval)
 
 
-def perform_attempt(cfg, logger) -> dict:
+def _game_is_running(cfg) -> bool:
+    """Игра считается запущенной, если жив её процесс или найдено окно."""
+    if cfg.game.window_process:
+        try:
+            if winapi.is_process_running(cfg.game.window_process):
+                return True
+        except Exception:
+            pass
+    if cfg.game.window_title:
+        try:
+            if winapi.find_window(cfg.game.window_title):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _relaunch_game(cfg, logger) -> bool:
+    """Запускает игру через ярлык .url, ждёт и активирует её окно.
+
+    Возвращает True, если игра запущена (окно найдено). Фокус дальше
+    обеспечивает ActionRunner перед каждым действием.
+    """
+    if not (cfg.game.window_title or cfg.game.window_process):
+        logger.warning(
+            "relaunch требует game.window_title/window_process — автозапуск пропущен."
+        )
+        return False
+    shortcut = (cfg.relaunch.shortcut or "").strip()
+    if not shortcut or not Path(shortcut).is_file():
+        logger.error(
+            "Ярлык игры не найден: %r — автозапуск невозможен. "
+            "Проверьте relaunch.shortcut в конфигурации.", shortcut,
+        )
+        return False
+    logger.info("Игра не запущена — запускаю через ярлык: %s", shortcut)
+    try:
+        winapi.launch_shortcut(shortcut)
+    except Exception as exc:
+        logger.error("Не удалось запустить игру через ярлык: %s", exc)
+        return False
+
+    time.sleep(max(0.0, cfg.relaunch.wait_sec))
+    logger.info("Жду появления окна игры (%s)...",
+                cfg.game.window_title or cfg.game.window_process)
+
+    hwnd = None
+    wait_sec = max(1.0, cfg.loop.window_wait_sec)
+    interval = max(0.1, cfg.loop.window_check_interval_sec)
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        hwnd = find_target_window(cfg.game.window_title, cfg.game.window_process)
+        if hwnd:
+            break
+        time.sleep(interval)
+    if not hwnd:
+        logger.warning("Окно игры не появилось за %.0f с.", wait_sec)
+        return False
+
+    if winapi.activate_window(hwnd):
+        logger.info("Окно игры активировано (HWND=%d).", hwnd)
+    else:
+        logger.warning("Не удалось активировать окно игры — жду переключения.")
+    return True
+
+
+class _RelaunchGuard:
+    """Контроль автозапуска игры (опция relaunch).
+
+    - relaunch(): перезапускает игру, если она не запущена. Троттлинг
+      RELAUNCH_COOLDOWN_SEC — чтобы не спамить повторными запусками, пока
+      Steam/игра грузятся; при успехе помечает «игру недавно перезапустили».
+    - consume_relaunch(): однократно возвращает True, если игра была недавно
+      перезапущена (в т.ч. посреди предыдущей попытки) — тогда следующая
+      попытка выполняется по relaunch-сценарию вместо обычного.
+    """
+
+    RELAUNCH_COOLDOWN_SEC = 30.0   # мин. интервал между попытками запуска
+    RELAUNCH_FRESH_SEC = 60.0      # период, в который действует «после перезапуска»
+
+    def __init__(self, cfg, logger) -> None:
+        self.cfg = cfg
+        self.logger = logger
+        self._last_attempt = 0.0
+        self._relaunched_at = 0.0
+
+    def game_down(self) -> bool:
+        """True, если игра не запущена (нет процесса и окна)."""
+        if not (self.cfg.game.window_title or self.cfg.game.window_process):
+            return False
+        return not _game_is_running(self.cfg)
+
+    def relaunch(self) -> bool:
+        """Запускает игру, если она не запущена. Возвращает True при успехе."""
+        if not self.cfg.relaunch.enabled:
+            return False
+        if not (self.cfg.game.window_title or self.cfg.game.window_process):
+            return False
+        now = time.time()
+        if now - self._last_attempt < self.RELAUNCH_COOLDOWN_SEC:
+            return False
+        self._last_attempt = now
+        if not self.game_down():
+            return False
+        ok = _relaunch_game(self.cfg, self.logger)
+        if ok:
+            self._relaunched_at = now
+        return ok
+
+    def consume_relaunch(self) -> bool:
+        """Однократно сообщает, что игра была недавно перезапущена."""
+        fresh = bool(self._relaunched_at
+                     and time.time() - self._relaunched_at < self.RELAUNCH_FRESH_SEC)
+        self._relaunched_at = 0.0
+        return fresh
+
+
+def perform_attempt(cfg, logger, use_relaunch_actions: bool = False,
+                    on_game_down=None) -> dict:
     """Выполняет одну попытку: сценарий -> скриншот -> OCR -> поиск событий.
+
+    use_relaunch_actions=True — вместо profile.actions выполняется
+    relaunch.actions (сценарий первой попытки после автозапуска игры).
+    В этом случае проверка меню не выполняется (в relaunch-сценарии свои
+    esc в начале), а первый esc сценария никогда не пропускается.
 
     Возвращает словарь с полями:
       status: 'ok' | 'no_log' | 'focus_lost' | 'ocr_error'
@@ -177,11 +320,17 @@ def perform_attempt(cfg, logger) -> dict:
 
     # Ждём появления и активации окна игры — скриншот проверки меню должен
     # сниматься именно с окна игры (окончательно окно ждёт runner.run()).
-    hwnd = _wait_game_window(cfg, logger)
+    hwnd = _wait_game_window(cfg, logger, on_game_down=on_game_down)
+
+    # После автозапуска используем relaunch-сценарий вместо обычного.
+    use_relaunch = use_relaunch_actions and bool(cfg.relaunch.actions)
+    actions = cfg.relaunch.actions if use_relaunch else cfg.profile.actions
 
     # Проверка: открыто ли уже игровое меню (тогда первый esc сценария не нужен).
+    # Для relaunch-сценария не нужна: игра только что стартовала, и свои esc
+    # в начале сценария всегда выполняются полностью.
     menu_open = False
-    if cfg.menu.enabled:
+    if cfg.menu.enabled and not use_relaunch:
         try:
             pre_img = screen.capture(cfg.screenshots.capture)
             pre_path = shots_dir / "menu_check.png"
@@ -195,14 +344,15 @@ def perform_attempt(cfg, logger) -> dict:
             logger.info("Меню игры уже открыто — первый esc сценария будет пропущен.")
 
     runner = ActionRunner(
-        actions=cfg.profile.actions,
+        actions=actions,
         key_hold_sec=cfg.game.key_hold_sec,
         target_window_title=cfg.game.window_title,
         target_window_process=cfg.game.window_process,
-        skip_first_esc=menu_open,
+        skip_first_esc=(False if use_relaunch else menu_open),
         wait_window_sec=cfg.loop.window_wait_sec,
         check_interval_sec=cfg.loop.window_check_interval_sec,
         on_wait=logger.info,
+        on_game_down=on_game_down,
     )
 
     logger.info("Запуск сценария: загрузка сохранения, пропуск ходов, открытие летописи...")
@@ -324,17 +474,19 @@ def perform_attempt(cfg, logger) -> dict:
             "game_focused": game_focused, "hwnd": hwnd}
 
 
-def press_esc_close_log(cfg, logger=None) -> None:
+def press_esc_close_log(cfg, logger=None, on_game_down=None) -> None:
     """Нажимает esc — скрывает летопись (последний esc из multikey-сценария).
 
     Перед esc ждёт, пока окно игры активно; если окно недоступно в течение
     таймаута — esc не отправляется (в лог пишется предупреждение).
+    on_game_down — колбэк перезапуска игры (опция relaunch): если игра
+    выключилась, она будет перезапущена, а esc отправлен уже в новое окно.
     """
     if logger is None:
         logger = logging.getLogger(LOG_NAME)
     time.sleep(cfg.loop.esc_after_read_sec)
     try:
-        _wait_game_window(cfg, logger)
+        _wait_game_window(cfg, logger, on_game_down=on_game_down)
     except WindowNotReadyError as exc:
         logger.warning("esc не отправлен: %s", exc)
         return
@@ -391,6 +543,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             logger.info("Отсчёт прерван: запрошена остановка.")
             return 0
 
+    guard = _RelaunchGuard(cfg, logger)
     log_miss_streak = 0
     attempt = 0
     while True:
@@ -401,8 +554,17 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
         limit_label = "∞" if max_attempts == 0 else str(max_attempts)
         logger.info("=== Попытка %d/%s ===", attempt, limit_label)
 
+        # Опция relaunch: если игра не запущена или выключилась — запустить её
+        # через ярлык, подождать и активировать окно. Если игра была недавно
+        # перезапущена (в т.ч. посреди предыдущей попытки) — текущая попытка
+        # выполняется по relaunch-сценарию вместо обычного.
+        if cfg.relaunch.enabled and guard.game_down():
+            guard.relaunch()
+        relaunched = guard.consume_relaunch()
+
         try:
-            res = perform_attempt(cfg, logger)
+            res = perform_attempt(cfg, logger, use_relaunch_actions=relaunched,
+                                  on_game_down=guard.relaunch)
         except WindowNotReadyError as exc:
             # Окно игры недоступно — ждём дальше, не засчитывая попытку.
             logger.warning("%s Жду следующей попытки...", exc)
@@ -437,7 +599,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
                     reason, log_miss_streak,
                 )
                 if res.get("game_focused"):
-                    press_esc_close_log(cfg)
+                    press_esc_close_log(cfg, on_game_down=guard.relaunch)
                 return 3
             logger.warning(
                 "%s — попытка не засчитана (%d/%d), повторяю сценарий.",
@@ -446,7 +608,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             if cfg.screenshots.save_fail and res.get("screenshot"):
                 save_attempt_screenshot(cfg, res["screenshot"], "no_log", attempt)
             if res.get("game_focused"):
-                press_esc_close_log(cfg)
+                press_esc_close_log(cfg, on_game_down=guard.relaunch)
             time.sleep(cfg.loop.pause_between_attempts_sec)
             continue
 
@@ -461,7 +623,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             if cfg.screenshots.save_success:
                 save_attempt_screenshot(cfg, res["screenshot"], "success", attempt)
             logger.info("Закрываю летопись (esc) и останавливаюсь.")
-            press_esc_close_log(cfg)
+            press_esc_close_log(cfg, on_game_down=guard.relaunch)
             logger.info("Готово: интересные события найдены на попытке %d.", attempt)
             return 0
 
@@ -470,7 +632,7 @@ def run_loop(cfg, logger, once: bool = False, stop_event=None) -> int:
             save_attempt_screenshot(cfg, res["screenshot"], "no_events", attempt)
 
         logger.info("Закрываю летопись (esc) и повторяю сценарий заново.")
-        press_esc_close_log(cfg)
+        press_esc_close_log(cfg, on_game_down=guard.relaunch)
 
         if 0 < max_attempts <= attempt:
             break
@@ -607,6 +769,8 @@ def selftest(cfg, cfg_path, logger) -> int:
           f"(проверка каждые {cfg.loop.window_check_interval_sec:.1f} с)")
     print(f"Проверка меню            : {'включена' if cfg.menu.enabled else 'выключена'}"
           f"{f' (crop={cfg.menu.crop}, маркеров: {len(cfg.menu.markers)})' if cfg.menu.enabled else ''}")
+    print(f"Автозапуск (relaunch)    : {'включён' if cfg.relaunch.enabled else 'выключен'}"
+          f"{f' ({cfg.relaunch.shortcut})' if cfg.relaunch.enabled else ''}")
     print(f"Интересных событий       : {len(cfg.events.items)} "
           f"({', '.join(i.name for i in cfg.events.items)})")
 
